@@ -1,122 +1,148 @@
-# Token Optimizer
+# token-optimizer
 
-Real-time token analytics and cost optimization for OpenClaw.
+**The itemized receipt for your AI bill.**
 
-See your actual token costs — not averages, yours. Track spending by model, complexity, and session type. Find waste. Prove savings.
+Your AI bill has no itemization. `token-optimizer` reads the logs you
+already have on disk — OpenClaw sessions, Claude Code projects, and the
+legacy collector's SQLite — and prints a single-page receipt: spend by
+model, spend by day, your top 10 most expensive calls, your cache hit
+rate, and an honest estimate of what you'd save by routing smarter.
 
-## Quick Start
+No proxy. No daemon. No API key. No network calls. You run it; it reads
+files; it prints Markdown or JSON. That's the whole product.
 
-```bash
-# 1. Start the collector daemon
-cd ~/.openclaw/workspace/projects/token-optimizer
-python3 -m src.daemon start
-
-# 2. Check it's running
-python3 -m src.daemon status
-
-# 3. View your usage (after some data is collected)
-python3 -m src.aggregator
+```sh
+token-optimizer analyze
 ```
 
-Or use the skill command in OpenClaw:
-```
-/usage-summary
-```
+---
 
-## How It Works
+## Why this exists
 
-Token Optimizer watches your OpenClaw gateway logs and extracts API call metrics:
+Every other "token optimizer" on the market is either:
 
-1. **Collector daemon** tails `~/.openclaw/logs/gateway.log`
-2. Parses ClawRouter routing lines: model, cost, tokens, complexity, savings
-3. Stores records in SQLite at `~/.openclaw/token-optimizer/usage.db`
-4. **Aggregator** computes summaries on demand
+1. A static checklist telling you what to do in the abstract, or
+2. A proxy/SDK wrapper that only starts logging _after_ you change your
+   code and trust a third party with your prompts.
 
-### What gets tracked
+Neither one tells you **what you actually spent yesterday**. That's the
+gap. We read your real logs, we compute the real cost from the current
+Anthropic pricing tables, and we show you the receipt. In ten seconds.
 
-Every ClawRouter routing decision produces a log line like:
-```
-[gateway] [MEDIUM] google/gemini-3.1-flash-lite $0.0097 (saved 94%) | score=0.24 | long (14367 tokens)
-```
+See [`FIRST_REPORT.md`](./FIRST_REPORT.md) for the output against our
+own real usage: 2,843 calls, $104.79, 90.8% cache hit rate, across
+OpenClaw + Claude Code in six days.
 
-The collector extracts: model, cost, savings, complexity, token count, and routing info.
+---
 
-## Commands
+## Install
 
-### Daemon Management
+There is nothing to install. One Python file, stdlib only, 3.8+.
 
-```bash
-python3 -m src.daemon start          # Start collector (background)
-python3 -m src.daemon start -f       # Start in foreground
-python3 -m src.daemon stop           # Stop collector
-python3 -m src.daemon status         # Check if running
-python3 -m src.daemon restart        # Restart
+```sh
+git clone https://github.com/2n2-ai/token-optimizer
+cd token-optimizer
+python3 src/token_optimizer.py analyze
 ```
 
-### Usage Reports
+Optional shim on your PATH:
 
-```bash
-python3 -m src.aggregator            # Print 30-day summary
-python3 -m src.aggregator --days 7   # Last 7 days
-python3 -m src.aggregator --backfill # Recompute daily summaries
+```sh
+ln -s "$PWD/bin/token-optimizer" ~/bin/token-optimizer
+token-optimizer --version
 ```
 
-## Data Storage
+---
 
-All data is local:
+## Usage
 
-| File | Purpose |
-|------|---------|
-| `~/.openclaw/token-optimizer/usage.db` | SQLite database |
-| `~/.openclaw/token-optimizer/collector.pid` | Daemon PID file |
-| `~/.openclaw/logs/token-optimizer.log` | Daemon log |
-
-## Database Schema
-
-### api_calls
-Per-API-call records with model, tokens, cost, complexity, routing info.
-
-### sessions
-Session tracking (session_id, start/end times, agent type).
-
-### daily_summary
-Pre-computed daily aggregates for fast queries.
-
-## Requirements
-
-- Python 3.8+
-- OpenClaw with gateway logging enabled (default)
-- No external dependencies (stdlib only)
-
-## Testing
-
-```bash
-cd ~/.openclaw/workspace/projects/token-optimizer
-python3 -m pytest tests/ -v
-# or
-python3 -m unittest tests.test_database -v
+```sh
+token-optimizer analyze                          # auto-discover all sources
+token-optimizer analyze ~/.openclaw/agents       # specific path
+token-optimizer analyze --source openclaw        # one source kind
+token-optimizer analyze --source claude-code
+token-optimizer analyze --days 7                 # last 7 days only
+token-optimizer analyze --format json            # machine-readable
+token-optimizer analyze -o report.md             # write to file
+token-optimizer analyze --baseline claude-opus-4-1  # legacy model baseline
+token-optimizer sources                          # list what we'd read
 ```
 
-## Troubleshooting
+Default sources (no path given):
 
-**No data showing up?**
-- Check the daemon is running: `python3 -m src.daemon status`
-- Check gateway.log exists: `ls ~/.openclaw/logs/gateway.log`
-- Check for ClawRouter lines: `grep '\[gateway\] \[' ~/.openclaw/logs/gateway.log | tail -5`
-- Check daemon log: `tail ~/.openclaw/logs/token-optimizer.log`
+- `~/.openclaw/agents/*/sessions/*.jsonl`
+- `~/.claude/projects/**/*.jsonl`
+- `~/.openclaw/token-optimizer/usage.db`
 
-**Database corrupt?**
-- Stop the daemon: `python3 -m src.daemon stop`
-- Delete and recreate: `rm ~/.openclaw/token-optimizer/usage.db`
-- Restart: `python3 -m src.daemon start`
+---
 
-## Privacy
+## What's in the report
 
-- Zero network calls
-- No prompts or responses stored
-- Only operational metrics (model, tokens, cost, timestamps)
-- All data under `~/.openclaw/` with user-only permissions
+- **Summary:** total spend, calls, tokens in/out, cache reads/writes, cache hit rate, window.
+- **Spend by source:** how much came from OpenClaw vs Claude Code vs legacy SQLite.
+- **Spend by model:** per-model breakdown with share of total.
+- **Spend by day:** daily trend with ASCII bars.
+- **Top 10 most expensive calls:** timestamp, model, tokens, cost.
+- **Savings teaser:** what you'd save if short-output calls had been routed down a tier. Heuristic today, classifier in Phase 2.
+
+---
+
+## Pricing math
+
+The pricing tables (`src/token_optimizer.py:PRICING`) are verified
+against <https://platform.claude.com/docs/en/about-claude/pricing> as of
+2026-04-06. Current models:
+
+| Model | Input | Output | Cache hit | 5m cache write | 1h cache write |
+|---|---:|---:|---:|---:|---:|
+| Opus 4.6   | $5  | $25 | $0.50 | $6.25 | $10  |
+| Sonnet 4.6 | $3  | $15 | $0.30 | $3.75 | $6   |
+| Haiku 4.5  | $1  | $5  | $0.10 | $1.25 | $2   |
+
+All values are per million tokens. Legacy models (Opus 4.1, Haiku 3.5,
+etc.) are supported for historical reports.
+
+---
+
+## Roadmap
+
+- **Phase 1 (shipped):** Observability. Read logs, print receipt. ✅
+- **Phase 2 (next):** Real classifier, cache opportunity scoring, weekly
+  digest, waste detection. First paid feature.
+- **Phase 3 (only if earned):** Library mode, cache warming, opt-in
+  proxy. The proxy becomes a feature, not the product.
+
+See [`PLAN.md`](./PLAN.md) and [`BACKLOG.md`](./BACKLOG.md) for the
+honest state.
+
+---
+
+## Tests
+
+```sh
+python3 -m unittest tests.test_cli -v
+```
+
+11 smoke tests covering pricing math, all three parsers, aggregation,
+and CLI integration (Markdown + JSON output).
+
+---
+
+## Security
+
+This tool is read-only and does not make any network calls. It opens
+files on your local disk. It does not read API keys, and it cannot
+modify, send, or route any API traffic. If you're nervous, run it in a
+sandbox.
+
+For the paranoid: `grep -rn "requests\|urllib\|http" src/` returns nothing.
+
+---
 
 ## License
 
-Proprietary — 2n2.ai
+MIT. Take it, fork it, ship it.
+
+Built by [2n2.ai](https://2n2.ai) as the free wedge for our paid
+observability work. If you want the weekly digest, cache opportunity
+scoring, or per-call recommendations, those are coming in Phase 2.

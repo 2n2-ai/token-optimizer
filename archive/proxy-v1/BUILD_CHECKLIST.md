@@ -1,57 +1,79 @@
 # Token Optimizer — Build Checklist
 
-## Phase 1: MVP (Target: 2 weeks)
+## Phase 1: MVP (Target: 2 weeks) — ✅ COMPLETE
 
 ### Core Infrastructure
-- [ ] Create `~/.openclaw/skills/token-optimizer/` directory structure
-- [ ] Set up Python project with minimal deps (stdlib only)
-- [ ] Create SKILL.md (ClawHub manifest)
-- [ ] Create SECURITY.md (follow Asif2BD template)
+- [x] Create `proxy/` directory structure
+- [x] Set up Python project with minimal deps (stdlib only)
+- [x] Create SKILL.md (ClawHub manifest)
+- [x] Create SECURITY.md (follow Asif2BD template)
 
-### Data Collection Daemon
-- [ ] `collector.py` — log tailer
-  - [ ] Watch `~/.openclaw/logs/gateway-*.log`
-  - [ ] Extract model, tokens, cost, timestamp per API call
-  - [ ] Parse session transcripts (future: full context analysis)
-  - [ ] Handle log rotation
-  - [ ] Graceful error handling
+### Anthropic HTTP Proxy
+- [x] `server.py` — HTTP proxy listening on localhost:9400
+  - [x] Intercepts POST /v1/messages requests
+  - [x] Forward headers correctly to Anthropic
+  - [x] Handle both sync and streaming (SSE) responses
+  - [x] Fail-open: if proxy fails, forward request unchanged
+  - [x] Graceful error handling + logging
 
-- [ ] `database.py` — SQLite schema
-  - [ ] Table: `api_calls` (model, tokens_in, tokens_out, cost, timestamp, session_id, task_type)
-  - [ ] Table: `sessions` (session_id, start_time, end_time, agent_type)
-  - [ ] Table: `daily_summary` (date, total_cost, cost_by_model, cost_by_session_type)
-  - [ ] Indices on timestamp, session_id, model for fast queries
+- [x] `classifier.py` — request complexity classifier
+  - [x] SIMPLE: short factual questions
+  - [x] MEDIUM: extraction, summarization, analysis
+  - [x] COMPLEX: multi-file code review, architecture
+  - [x] REASONING: formal proofs, mathematical derivations
+  - [x] Heuristic-based (<10ms per request)
+  - [x] Keyword scoring, code block counting, text length analysis
 
-- [ ] `daemon.py` — background service
-  - [ ] Start/stop/restart commands
-  - [ ] Check-in heartbeat
-  - [ ] Logs to `~/.openclaw/logs/token-optimizer.log`
+- [x] `router.py` — model selection
+  - [x] SIMPLE → Haiku (40x cheaper)
+  - [x] MEDIUM → Sonnet (5x cheaper)
+  - [x] COMPLEX → Opus (same cost, full capability)
+  - [x] REASONING → Sonnet + Extended Thinking
 
-### Analytics Engine (Phase 1: Basic)
-- [ ] `aggregator.py` — compute daily/weekly/monthly summaries
-  - [ ] Total spend
-  - [ ] Spend by model
-  - [ ] Spend by session type (heartbeat vs. main)
-  - [ ] Daily trend
-  
-### Skill Interface
-- [ ] `SKILL.md` — register commands
-- [ ] `/usage-summary` command
-  - [ ] Monthly spend
-  - [ ] Top 2 cost drivers
-  - [ ] Day-over-day trend
-  - [ ] Upsell: "Upgrade to Pro for detailed breakdown"
+- [x] `metrics.py` — SQLite logging
+  - [x] proxy_requests table schema
+  - [x] Cost calculation per model
+  - [x] Baseline cost calculation
+  - [x] Savings tracking
+  - [x] Thread-safe database access
 
-### Testing
-- [ ] Manual testing with real OpenClaw logs
-- [ ] Verify data accuracy (spot-check against raw logs)
-- [ ] Daemon startup/shutdown
-- [ ] Long-running stability (run 24h without issues)
+- [x] `cache_manager.py` — prompt caching setup
+  - [x] Wrap system prompts for cache API
+  - [x] Detect cache-eligible requests
+  - [x] Log cache read/creation tokens
+
+- [x] `dashboard.py` — metrics rendering
+  - [x] HTML dashboard (GitHub-dark theme)
+  - [x] Cost cards (today, savings, requests, cache rate)
+  - [x] Tier breakdown table
+  - [x] Recent requests table
+  - [x] Real-time /stats JSON endpoint
+
+- [x] `config.py` — configuration constants
+  - [x] Proxy address/port
+  - [x] Model mapping per tier
+  - [x] Pricing matrix
+  - [x] Custom header names
+
+### Database
+- [x] SQLite schema in metrics.py
+  - [x] Table: `proxy_requests` (timestamp, models, tokens, cost, savings, error)
+  - [x] Indices on timestamp and tier
+  - [x] WAL mode for concurrency
 
 ### Documentation
-- [ ] README.md (how to install, use, troubleshoot)
-- [ ] ARCHITECTURE.md (already drafted)
-- [ ] Inline code comments
+- [x] README.md (updated with proxy info)
+- [x] ARCHITECTURE.md (updated)
+- [x] PROXY_SETUP.md (comprehensive setup guide)
+- [x] Inline code comments
+
+### Testing
+- [x] Classifier tests (SIMPLE/MEDIUM/COMPLEX/REASONING)
+- [x] Router tests (tier → model mapping)
+- [x] Integration test (full proxy request flow)
+- [x] Database schema validation
+- [x] Dashboard rendering test
+- [x] Live proxy running on localhost:9400
 
 ---
 

@@ -1,225 +1,147 @@
-# Token Optimizer Architecture
+# Token Optimizer — Architecture
 
-## Overview
+_Last updated: 2026-04-06 (Phase 1)_
 
-A lightweight, local-first token analytics engine that monitors OpenClaw agent activity and provides real-time insights into token usage, cost, and optimization opportunities.
-
-**Core premise:** Other tools tell you what to change. Ours shows you what's happening and proves savings with your own data.
-
----
-
-## System Design
-
-### Layer 1: Data Collection (Local Log Tailer)
-
-**Component:** `token-optimizer-collector` (daemon)
-
-Runs locally, tails OpenClaw logs:
-- `~/.openclaw/logs/gateway-*.log`
-- Session transcripts when available
-
-Extracts per-call metrics:
-- Model used
-- Tokens in / out
-- Cost
-- Timestamp
-- Task type (inferred from context)
-- Session ID
-
-**Storage:** SQLite database at `~/.openclaw/workspace/token-optimizer/usage.db`
-
-**Why local-only?**
-- Zero cloud infrastructure cost
-- Zero privacy concerns
-- Works offline
-- No API keys or credentials needed
-
----
-
-### Layer 2: Analytics Engine
-
-**Component:** `token-optimizer-analyzer` (Python module)
-
-Processes raw logs into insights:
-
-1. **Usage Aggregation**
-   - Cost per model
-   - Cost per session type (heartbeat vs. main)
-   - Cost per task category
-   - Daily/weekly/monthly trends
-
-2. **Waste Detection**
-   - Duplicate context loads (same file loaded multiple times in 1 session)
-   - Oversized heartbeats
-   - Model mismatches (Opus used for simple tasks)
-   - Repeated failed attempts (retry loops)
-
-3. **Benchmarking**
-   - Before/after ClawRouter adoption
-   - Baseline vs. optimized spend
-   - Projected monthly savings if optimization X is adopted
-
-4. **Recommendations Engine**
-   - Ranked by ROI (savings ÷ complexity)
-   - With confidence scores
-   - Empirically tested on your own data
-
----
-
-### Layer 3: Skill Interface
-
-**Component:** `token-optimizer-skill` (ClawHub skill)
-
-**Commands:**
+## The whole system
 
 ```
-/usage-summary          → Monthly spend, top cost drivers
-/usage-detail MODEL     → Breakdown by model, task type, session
-/waste-report           → Top 5 waste sources with examples
-/savings-potential      → Recommendations ranked by ROI
-/optimize RECOMMEND_ID  → Apply specific optimization (dry-run first)
+┌───────────────────────────────┐     ┌───────────────────────────────┐     ┌─────────────────┐
+│ ~/.openclaw/agents/…/*.jsonl  │────▶│                               │     │                 │
+├───────────────────────────────┤     │  token_optimizer.py           │────▶│  Markdown       │
+│ ~/.claude/projects/**/*.jsonl │────▶│  • discover_sources           │     │  or JSON        │
+├───────────────────────────────┤     │  • parse_* (per source)       │     │  receipt        │
+│ ~/.openclaw/token-optimizer/  │────▶│  • aggregate                  │     │                 │
+│   usage.db (legacy)           │     │  • render_{markdown,json}     │     │                 │
+└───────────────────────────────┘     └───────────────────────────────┘     └─────────────────┘
 ```
 
-**Free tier:**
-- View basic spend summary
-- See top waste sources
-- Get generic recommendations
-
-**Paid tier (ClawMart):**
-- Historical tracking (30+ days)
-- Detailed per-task analytics
-- Custom recommendation engine
-- Automated A/B testing of optimizations
-- Slack/email reports
+That's it. One file. Read-only. No network, no daemon, no database
+_writes_, no API keys.
 
 ---
 
-### Layer 4: Homepage & Sales
+## Design principles
 
-**ClawMart product page:**
-- Hero: "See your actual token costs. Not averages. Yours."
-- Video demo of the dashboard
-- Case studies (simulated but realistic)
-- Pricing: Free tier + $19/mo for full features
-- "Try free" button → install skill
-
----
-
-## Data Flow
-
-```
-┌─────────────────────┐
-│  OpenClaw Logs      │
-│ (gateway, sessions) │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ token-optimizer-collector   │  ← Daemon (always running)
-│ (log tailer)                │
-└──────────┬──────────────────┘
-           │
-           ▼ (writes to)
-┌─────────────────────────────┐
-│ ~/.openclaw/token-optimizer │
-│ usage.db (SQLite)           │
-└──────────┬──────────────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ token-optimizer-skill       │  ← User invokes on demand
-│ (ClawHub skill)             │
-└──────────┬──────────────────┘
-           │
-           ▼
-┌─────────────────────────────┐
-│ HTML dashboard + CLI        │
-│ (analytics + recommendations)
-└─────────────────────────────┘
-```
+1. **Single file, stdlib only, Python 3.8+.** Anyone can read the whole
+   thing end-to-end. No transitive dependencies, no lockfiles, no build
+   step. `src/token_optimizer.py` is the whole product.
+2. **Read-only.** We never mutate or forward user data. The CLI doesn't
+   even open sockets.
+3. **Auto-detect.** If you don't pass a path, we scan the three well-
+   known locations. We want the median case to be `token-optimizer
+   analyze` and a number appearing in ten seconds.
+4. **Fail soft.** Malformed JSON lines, unknown models, missing cost
+   blocks, corrupt SQLite — every parser swallows exceptions per record
+   and keeps going. A broken log line should never stop a report.
+5. **Everything flows through `Call`.** One normalized shape with eight
+   fields. Parsers produce `Call`s; aggregation only reads `Call`s. Add
+   a new parser and it composes with every existing report.
+6. **Pricing is a table, not opinions.** `PRICING` is the single source
+   of truth. Tests pin every current-generation rate to a known value.
+7. **Optimization is a phase, not a feature.** Phase 1 ships the
+   receipt; Phase 2 ships recommendations; Phase 3 (only if asked)
+   ships routing. Each layer builds on the one below without refactoring.
 
 ---
 
-## Implementation Phases
+## Layers (inside the single file)
 
-### Phase 1: MVP (2 weeks)
-- ✅ Log collector daemon
-- ✅ Basic aggregation (cost per model, per day)
-- ✅ SQLite schema
-- ✅ Skill with `/usage-summary` command
-- ✅ Free tier on ClawHub
+### Layer 1 — Pricing (`PRICING`, `price_call`, `normalize_model`)
 
-### Phase 2: Analytics (2 weeks)
-- ✅ Waste detection (duplicate loads, oversized context, model mismatches)
-- ✅ Per-task categorization
-- ✅ Recommendation engine (ranked by ROI)
-- ✅ `/waste-report` and `/savings-potential` commands
+Per-million rates verified against the Anthropic pricing page
+(RESEARCH.md §1). Covers Opus 4/4.1/4.5/4.6, Sonnet 4/4.5/4.6, Haiku
+3/3.5/4.5. Model names are normalized by stripping the trailing
+`-YYYYMMDD` date suffix so `claude-opus-4-6-20251001` matches
+`claude-opus-4-6`.
 
-### Phase 3: ClawMart Launch (1 week)
-- ✅ Paid tier with historical tracking
-- ✅ Product homepage
-- ✅ Case studies
-- ✅ Sales copy (use the "Average Machine" talk themes)
+### Layer 2 — Parsers
 
-### Phase 4: Polish (ongoing)
-- A/B testing framework
-- Slack integration for daily reports
-- Mobile dashboard
-- Export to CSV/PDF
+Three parsers, one per source kind, each yielding `Call` records:
 
----
+- `parse_openclaw_session(path)` — reads the OpenClaw nested `usage.cost`
+  shape. Uses the logged cost when present; falls back to pricing math
+  when a cost block is missing.
+- `parse_claude_code_session(path)` — reads the raw Anthropic SDK shape
+  embedded in Claude Code logs. Always computes cost from pricing. Picks
+  the 5m or 1h cache-write rate based on
+  `cache_creation.ephemeral_*_input_tokens`.
+- `parse_sqlite_db(path)` — reads both `api_calls` and the older
+  `proxy_requests` tables in the legacy collector's SQLite so we don't
+  lose historical data.
 
-## Key Differentiators vs. Existing Tools
+Adding a parser is a 30-line function plus one `glob` pattern in
+`discover_sources`.
 
-| Feature | Others | Ours |
-|---------|--------|------|
-| Static advice | ✅ | ❌ |
-| Real data from your agent | ❌ | ✅ |
-| Empirical savings proof | ❌ | ✅ |
-| Historical tracking | Some | ✅ |
-| Per-task breakdown | ❌ | ✅ |
-| Automated recommendations | ❌ | ✅ |
-| Cloud dependency | Some | ❌ (local-only) |
+### Layer 3 — Discovery (`discover_sources`)
 
----
+Given an optional path and an optional `--source`, return the list of
+`(kind, file)` pairs to read. If no path is given, scans three default
+globs. If a path is given, detects kind by filename/extension and
+location.
 
-## Technical Stack
+### Layer 4 — Aggregation (`aggregate`)
 
-- **Collector:** Python (stdlib only)
-- **Database:** SQLite
-- **Skill:** SKILL.md + Python scripts
-- **UI:** HTML + simple charts (Chart.js)
-- **Distribution:** ClawHub (free) + ClawMart (paid)
+Takes a list of `Call`s and produces a JSON-friendly dict:
 
----
+- `summary`: totals, cache hit rate, window.
+- `by_model`: sorted by cost.
+- `by_day`: sorted by date.
+- `by_source`: so the receipt can show cross-tool spend.
+- `top_calls`: 10 most expensive.
+- `savings_estimate`: baseline-vs-actual and the Phase 2 teaser (short-
+  output calls routed down a tier).
 
-## Revenue Model
+### Layer 5 — Rendering (`render_markdown`, `render_json`)
 
-**Free tier:** (ClawHub)
-- Basic spend summary
-- Top 3 waste sources
-- Generic recommendations
-- Upsell to paid
+Pure functions of the aggregate dict plus the sources list. No I/O until
+the `analyze` command decides to write stdout or a file.
 
-**Paid tier:** $19/month (ClawMart)
-- Full analytics dashboard
-- 30+ days of history
-- Per-task breakdowns
-- Ranked recommendations (ROI-sorted)
-- Slack daily digest
-- Export to CSV
+### Layer 6 — CLI (`build_parser`, `cmd_analyze`, `cmd_sources`, `main`)
 
-**Stretch:** $99/year pre-paid (10% discount)
-
-**Estimated conversion:** 5-10% of free users → paid
+Thin argparse wiring. Two subcommands today: `analyze` and `sources`.
+Everything else is flags on `analyze`.
 
 ---
 
-## Success Metrics
+## What got thrown away
 
-- 500+ ClawHub installs in 3 months
-- 50+ paid subscribers by EOQ
-- Average customer sees 40%+ cost reduction
-- NPS > 8
+The original architecture was a proxy + collector daemon + HTML
+dashboard. That work is archived under `archive/proxy-v1/`. The pieces
+we kept:
+
+- **Pricing tables** — rewritten and updated for Opus 4.6 / Sonnet 4.6 /
+  Haiku 4.5.
+- **Classifier heuristics** — kept in the archive for Phase 2 reuse.
+- **Legacy SQLite schema** — supported as a read-only source.
+
+Nothing else from the proxy branch is wired into the Phase 1 CLI.
 
 ---
+
+## Testing
+
+`tests/test_cli.py` — 11 smoke tests covering:
+
+- Pricing math for every current-generation model + cache tier.
+- Model-name normalization.
+- Unknown-model fallback (non-Anthropic providers cost $0).
+- All three parsers against synthetic fixtures.
+- Aggregation correctness.
+- CLI integration (Markdown output, JSON output, `-o` file writer).
+
+Run: `python3 -m unittest tests.test_cli -v`.
+
+---
+
+## What Phase 2 will add without breaking Phase 1
+
+- A `Call.recommended_tier` field populated by the classifier.
+- A `waste.py` module (or `waste_*` functions in the same file) that
+  turns `Call` sequences into named waste findings.
+- A `digest` subcommand that emits a weekly summary to
+  stdout/Slack/email.
+- A `watch` subcommand that re-runs on log change.
+- A proper `--since YYYY-MM-DD` filter.
+- Parsers for Cursor, ChatGPT export, raw Anthropic SDK, OpenAI SDK.
+
+None of these require rewriting Layer 1–4. Each is additive.
