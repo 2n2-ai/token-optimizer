@@ -186,6 +186,98 @@ class AggregationTests(unittest.TestCase):
             tmp.cleanup()
 
 
+class NewFeatureTests(unittest.TestCase):
+    """Tests for v0.3.0 Phase 1 polish features."""
+
+    def test_zero_cost_models_hidden_in_markdown(self):
+        """$0 cost models should not appear in the by-model table."""
+        records = OPENCLAW_SAMPLE + [
+            {
+                "type": "message",
+                "id": "m3",
+                "timestamp": "2026-04-01T12:00:03.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "delivery-mirror",
+                    "usage": {
+                        "input": 10, "output": 10,
+                        "cacheRead": 0, "cacheWrite": 0,
+                        "cost": {"total": 0.0},
+                    },
+                },
+            },
+        ]
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, records)
+            calls = list(to.parse_openclaw_session(p))
+            agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+            md = to.render_markdown(agg, [("openclaw", p)])
+            # delivery-mirror should appear in the hidden footnote, not the table
+            self.assertIn("delivery-mirror", md)
+            self.assertIn("$0 cost hidden", md)
+            # It should NOT have a row with pipes for delivery-mirror
+            for line in md.split("\n"):
+                if line.startswith("|") and "`delivery-mirror`" in line:
+                    self.fail("delivery-mirror should be hidden from the table")
+        finally:
+            tmp.cleanup()
+
+    def test_cost_per_call_column(self):
+        """Markdown should include a Cost/call column header."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, OPENCLAW_SAMPLE)
+            calls = list(to.parse_openclaw_session(p))
+            agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+            md = to.render_markdown(agg, [("openclaw", p)])
+            self.assertIn("Cost/call", md)
+        finally:
+            tmp.cleanup()
+
+    def test_top_n_flag(self):
+        """aggregate(top_n=1) should return only 1 top call."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, OPENCLAW_SAMPLE)
+            calls = list(to.parse_openclaw_session(p))
+            agg = to.aggregate(calls, baseline="claude-sonnet-4-6", top_n=1)
+            self.assertEqual(len(agg["top_calls"]), 1)
+        finally:
+            tmp.cleanup()
+
+    def test_window_format_pretty(self):
+        """Window line should show YYYY-MM-DD HH:MM format, not raw ISO."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, OPENCLAW_SAMPLE)
+            calls = list(to.parse_openclaw_session(p))
+            agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+            md = to.render_markdown(agg, [("openclaw", p)])
+            # Should have space-separated date time, not T
+            self.assertIn("2026-04-01 12:00", md)
+        finally:
+            tmp.cleanup()
+
+    def test_unknown_model_warns_once(self):
+        """Unknown model should warn to stderr but only once per model."""
+        to._warned_unknown_models.clear()
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            to.price_call("totally-fake-model", input_tokens=100)
+            to.price_call("totally-fake-model", input_tokens=100)
+            warnings = sys.stderr.getvalue()
+        finally:
+            sys.stderr = old_stderr
+            to._warned_unknown_models.clear()
+        self.assertEqual(warnings.count("totally-fake-model"), 1)
+
+
 class CLIIntegrationTests(unittest.TestCase):
     def test_analyze_markdown(self):
         tmp = tempfile.TemporaryDirectory()

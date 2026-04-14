@@ -34,7 +34,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -158,6 +158,10 @@ def normalize_model(model: str) -> str:
     return base
 
 
+# Track unknown models we've already warned about (per process run).
+_warned_unknown_models: set = set()
+
+
 def price_call(
     model: str,
     input_tokens: int = 0,
@@ -165,10 +169,15 @@ def price_call(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
     cache_write_kind: str = "5m",
+    warn: bool = True,
 ) -> float:
     """Compute USD cost for a call. Returns 0.0 if model is unknown."""
-    p = PRICING.get(normalize_model(model))
+    normalized = normalize_model(model)
+    p = PRICING.get(normalized)
     if not p:
+        if warn and normalized not in _warned_unknown_models and normalized != "unknown":
+            _warned_unknown_models.add(normalized)
+            print(f"warn: no pricing for model '{normalized}' — cost will be $0.00", file=sys.stderr)
         return 0.0
     cw_key = "cache_write_1h" if cache_write_kind == "1h" else "cache_write_5m"
     return (
@@ -259,6 +268,18 @@ def parse_openclaw_session(path: str) -> Iterable[Call]:
             cache_read = int(usage.get("cacheRead") or 0)
             cache_write = int(usage.get("cacheWrite") or 0)
             model = msg.get("model") or "unknown"
+            # Determine cache write kind from OpenClaw shape if available.
+            # OpenClaw may log cost.cacheWrite but doesn't always distinguish
+            # 5m vs 1h. If the cost block has cache_creation detail, use it.
+            cw_kind = "5m"  # default assumption
+            cache_creation = usage.get("cacheCreation") or {}
+            if isinstance(cache_creation, dict):
+                eph_1h = int(cache_creation.get("ephemeral_1h_input_tokens") or
+                             cache_creation.get("ephemeral1hInputTokens") or 0)
+                eph_5m = int(cache_creation.get("ephemeral_5m_input_tokens") or
+                             cache_creation.get("ephemeral5mInputTokens") or 0)
+                if eph_1h > eph_5m:
+                    cw_kind = "1h"
             # If cost is missing, derive it from pricing tables.
             if cost == 0.0 and (input_t or output_t or cache_read or cache_write):
                 cost = price_call(
@@ -267,6 +288,7 @@ def parse_openclaw_session(path: str) -> Iterable[Call]:
                     output_tokens=output_t,
                     cache_read_tokens=cache_read,
                     cache_write_tokens=cache_write,
+                    cache_write_kind=cw_kind,
                 )
             yield Call(
                 ts=ts,
@@ -507,7 +529,7 @@ def load_calls(sources: List[Tuple[str, str]], since: Optional[datetime]) -> Lis
 # Reporting
 # ---------------------------------------------------------------------------
 
-def aggregate(calls: List[Call], baseline: str) -> Dict[str, Any]:
+def aggregate(calls: List[Call], baseline: str, top_n: int = 10) -> Dict[str, Any]:
     """Compute every metric we report. Returns a JSON-friendly dict."""
     total_cost = sum(c.cost for c in calls)
     total_calls = len(calls)
@@ -554,7 +576,10 @@ def aggregate(calls: List[Call], baseline: str) -> Dict[str, Any]:
         s["cost"] += c.cost
         s["calls"] += 1
 
-    top_calls = sorted(calls, key=lambda c: c.cost, reverse=True)[:10]
+    top_calls = sorted(
+        (c for c in calls if c.cost > 0),
+        key=lambda c: c.cost, reverse=True,
+    )[:top_n]
 
     # Cache stats — only meaningful where the source records cache.
     cacheable_total = total_input + total_cache_read + total_cache_write
@@ -666,8 +691,14 @@ def render_markdown(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
             f"- **Cache hit rate:** {s['cache_hit_rate'] * 100:.1f}%"
         )
     if s["first_seen"]:
+        # Pretty-format: YYYY-MM-DD HH:MM instead of raw isoformat
+        def _fmt_ts(iso: str) -> str:
+            try:
+                return iso[:16].replace("T", " ")
+            except Exception:
+                return iso
         lines.append(
-            f"- **Window:** {s['first_seen']} → {s['last_seen']}"
+            f"- **Window:** {_fmt_ts(s['first_seen'])} → {_fmt_ts(s['last_seen'])}"
         )
     lines.append("")
 
@@ -684,16 +715,28 @@ def render_markdown(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
 
     lines.append("## Spend by model")
     lines.append("")
-    lines.append("| Model | Calls | Input | Output | Cache R | Cache W | Cost | Share |")
-    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|")
+    lines.append("| Model | Calls | Input | Output | Cache R | Cache W | Cost | Cost/call | Share |")
+    lines.append("|---|---:|---:|---:|---:|---:|---:|---:|---:|")
     total_cost = s["total_cost"] or 1.0
     for r in agg["by_model"]:
+        # Hide noise rows: $0 cost models (delivery-mirror, gateway-injected, free, etc.)
+        if r["cost"] == 0.0:
+            continue
         share = r["cost"] / total_cost * 100
+        cost_per_call = r["cost"] / r["calls"] if r["calls"] else 0.0
         lines.append(
             f"| `{r['model']}` | {fmt_int(r['calls'])} | "
             f"{fmt_int(r['input'])} | {fmt_int(r['output'])} | "
             f"{fmt_int(r['cache_read'])} | {fmt_int(r['cache_write'])} | "
-            f"{fmt_money(r['cost'])} | {share:.1f}% |"
+            f"{fmt_money(r['cost'])} | {fmt_money(cost_per_call)} | {share:.1f}% |"
+        )
+    # Show hidden $0 models as a footnote
+    zero_models = [r['model'] for r in agg['by_model'] if r['cost'] == 0.0]
+    if zero_models:
+        lines.append("")
+        lines.append(
+            f"_({len(zero_models)} model(s) with $0 cost hidden: "
+            f"{', '.join(f'`{m}`' for m in zero_models)})_"
         )
     lines.append("")
 
@@ -823,7 +866,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 1
     calls.sort(key=lambda c: c.ts)
 
-    agg = aggregate(calls, baseline=args.baseline)
+    agg = aggregate(calls, baseline=args.baseline, top_n=args.top)
 
     if args.format == "json":
         out = render_json(agg, sources)
@@ -869,6 +912,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Only include calls within the last N days. 0 = all time.")
     a.add_argument("--baseline", default=DEFAULT_BASELINE,
                    help=f"Model used as savings baseline. Default: {DEFAULT_BASELINE}.")
+    a.add_argument("--top", type=int, default=10,
+                   help="Number of top calls to show. Default: 10.")
     a.add_argument("--output", "-o", default=None,
                    help="Write report to a file instead of stdout.")
     a.set_defaults(func=cmd_analyze)

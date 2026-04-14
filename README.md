@@ -30,8 +30,8 @@ gap. We read your real logs, we compute the real cost from the current
 Anthropic pricing tables, and we show you the receipt. In ten seconds.
 
 See [`FIRST_REPORT.md`](./FIRST_REPORT.md) for the output against our
-own real usage: 2,843 calls, $104.79, 90.8% cache hit rate, across
-OpenClaw + Claude Code in six days.
+own real usage: 4,734 calls, $313.35, 91.8% cache hit rate, across
+OpenClaw + Claude Code over two weeks.
 
 ---
 
@@ -123,8 +123,8 @@ honest state.
 python3 -m unittest tests.test_cli -v
 ```
 
-11 smoke tests covering pricing math, all three parsers, aggregation,
-and CLI integration (Markdown + JSON output).
+16 tests covering pricing math, model normalization, all three parsers,
+aggregation, zero-cost model hiding, and CLI integration (Markdown + JSON output).
 
 ---
 
