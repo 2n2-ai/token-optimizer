@@ -29,21 +29,18 @@ Honest state of every track. Anything not in here doesn't exist yet.
 
 - [ ] Add a tiny `tests/` runner that smokes the CLI against a fixture
       jsonl. The pre-pivot tests in `tests/` are proxy-era, kill or rewrite.
-- [ ] Hide the `delivery-mirror` / `gateway-injected` / `free` rows
-      from the by-model table when their cost is $0 — they're noise.
-- [ ] Show a `Window` line in the report using YYYY-MM-DD HH:MM, not the
-      raw isoformat.
-- [ ] Add a `--top N` flag for top-call count (default 10).
-- [ ] Detect 1h vs 5m cache writes from OpenClaw shape too (currently
-      only Claude Code distinguishes).
-- [ ] Handle missing pricing for non-Anthropic models more loudly
-      (warn once per unknown model).
-- [ ] Add the `Cost / call` column to the by-model table.
+- [x] Hide the `delivery-mirror` / `gateway-injected` / `free` rows
+      from the by-model table when their cost is $0 — they're noise. ✅ (2026-04-14, also fixed top-calls leak)
+- [x] Show a `Window` line in the report using YYYY-MM-DD HH:MM. ✅ (already in code)
+- [x] Add a `--top N` flag for top-call count (default 10). ✅ (already in code)
+- [x] Detect 1h vs 5m cache writes from OpenClaw shape. ✅ (already in code)
+- [x] Handle missing pricing for non-Anthropic models (warn once per unknown). ✅ (already in code)
+- [x] Add the `Cost / call` column to the by-model table. ✅ (already in code)
 
 ## 🔵 Distribution (this week)
 
-- [ ] Create `2n2-ai/token-optimizer` public GitHub repo.
-- [ ] README modeled on `FIRST_REPORT.md` — show the receipt first.
+- [x] Create `2n2-ai/token-optimizer` public GitHub repo. ✅ (2026-04-14)
+- [x] README modeled on `FIRST_REPORT.md` — show the receipt first. ✅ (2026-04-14)
 - [ ] ClawHub `SKILL.md` that wraps `token-optimizer analyze`.
 - [ ] ClawMart free listing (compete with Milo Security's 2.8KB checklist).
 - [ ] Coldpress landing page with embedded live `FIRST_REPORT.md`.
