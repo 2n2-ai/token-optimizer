@@ -43,7 +43,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [x] README modeled on `FIRST_REPORT.md` — show the receipt first. ✅ (2026-04-14)
 - [x] ClawHub `SKILL.md` that wraps `token-optimizer analyze`. ✅ (2026-04-15)
 - [ ] ClawMart free listing (compete with Milo Security's 2.8KB checklist).
-- [ ] Coldpress landing page with embedded live `FIRST_REPORT.md`.
+- [x] Coldpress landing page with embedded live `FIRST_REPORT.md`. ✅ (2026-04-15, page.tsx parses live report dynamically, falls back to hardcoded data)
 - [ ] Cron job: regenerate `FIRST_REPORT.md` nightly, push to landing.
 - [ ] Launch tweet thread with our own numbers.
 
