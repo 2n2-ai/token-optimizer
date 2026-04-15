@@ -27,8 +27,8 @@ Honest state of every track. Anything not in here doesn't exist yet.
 
 ## 🟡 Phase 1 polish (this week, before public launch)
 
-- [ ] Add a tiny `tests/` runner that smokes the CLI against a fixture
-      jsonl. The pre-pivot tests in `tests/` are proxy-era, kill or rewrite.
+- [x] Add a tiny `tests/` runner that smokes the CLI against a fixture
+      jsonl. The pre-pivot tests in `tests/` are proxy-era, kill or rewrite. ✅ (2026-04-15, 16 tests, all green)
 - [x] Hide the `delivery-mirror` / `gateway-injected` / `free` rows
       from the by-model table when their cost is $0 — they're noise. ✅ (2026-04-14, also fixed top-calls leak)
 - [x] Show a `Window` line in the report using YYYY-MM-DD HH:MM. ✅ (already in code)
@@ -41,7 +41,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 
 - [x] Create `2n2-ai/token-optimizer` public GitHub repo. ✅ (2026-04-14)
 - [x] README modeled on `FIRST_REPORT.md` — show the receipt first. ✅ (2026-04-14)
-- [ ] ClawHub `SKILL.md` that wraps `token-optimizer analyze`.
+- [x] ClawHub `SKILL.md` that wraps `token-optimizer analyze`. ✅ (2026-04-15)
 - [ ] ClawMart free listing (compete with Milo Security's 2.8KB checklist).
 - [ ] Coldpress landing page with embedded live `FIRST_REPORT.md`.
 - [ ] Cron job: regenerate `FIRST_REPORT.md` nightly, push to landing.
