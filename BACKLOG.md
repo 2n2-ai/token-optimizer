@@ -57,7 +57,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [ ] `token-optimizer digest --weekly` subcommand: emit Markdown/Slack/email.
 - [ ] First paid feature: weekly digest auto-emailed to a user-supplied address.
 - [ ] `token-optimizer watch` (re-runs on log change, prints delta).
-- [ ] `--since 2026-04-01` absolute date filter (currently only `--days N`).
+- [x] `--since 2026-04-01` absolute date filter (currently only `--days N`). ✅ (2026-04-16, v0.3.1, overrides --days, 4 new tests)
 - [ ] Anthropic SDK direct parser (formalize the Claude Code shape).
 - [ ] Cursor parser.
 - [ ] OpenAI SDK parser.

@@ -12,6 +12,7 @@ Usage:
     token-optimizer analyze --source sqlite ~/.openclaw/token-optimizer/usage.db
     token-optimizer analyze --format json
     token-optimizer analyze --days 7
+    token-optimizer analyze --since 2026-04-01
 
 If no PATH is given, the CLI scans well-known locations:
 
@@ -34,7 +35,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -857,7 +858,16 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 2
 
     since: Optional[datetime] = None
-    if args.days and args.days > 0:
+    if getattr(args, "since", None):
+        try:
+            since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(
+                f"error: --since must be YYYY-MM-DD, got '{args.since}'",
+                file=sys.stderr,
+            )
+            return 2
+    elif args.days and args.days > 0:
         since = datetime.now(timezone.utc) - timedelta(days=args.days)
 
     calls = load_calls(sources, since)
@@ -910,6 +920,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Output format. Default: markdown.")
     a.add_argument("--days", type=int, default=0,
                    help="Only include calls within the last N days. 0 = all time.")
+    a.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                   help="Only include calls on or after this date (UTC). "
+                        "Overrides --days if both are given.")
     a.add_argument("--baseline", default=DEFAULT_BASELINE,
                    help=f"Model used as savings baseline. Default: {DEFAULT_BASELINE}.")
     a.add_argument("--top", type=int, default=10,

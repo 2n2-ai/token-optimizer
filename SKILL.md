@@ -48,6 +48,9 @@ This reads from all default locations:
 # Last 7 days only
 token-optimizer analyze --days 7
 
+# From a specific date (UTC)
+token-optimizer analyze --since 2026-04-01
+
 # OpenClaw sessions only
 token-optimizer analyze --source openclaw
 

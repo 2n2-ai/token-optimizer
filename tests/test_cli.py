@@ -278,6 +278,74 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(warnings.count("totally-fake-model"), 1)
 
 
+class SinceFlagTests(unittest.TestCase):
+    """Tests for --since YYYY-MM-DD absolute date filter."""
+
+    def _make_fixture(self, tmp):
+        p = os.path.join(tmp, "s.jsonl")
+        _write_jsonl(p, OPENCLAW_SAMPLE)  # timestamps: 2026-04-01
+        return p
+
+    def test_since_includes_matching_date(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            rc = to.main(["analyze", p, "--source", "openclaw",
+                          "--since", "2026-04-01", "--format", "json"])
+            self.assertEqual(rc, 0)
+        finally:
+            tmp.cleanup()
+
+    def test_since_excludes_older_calls(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            # All sample calls are on 2026-04-01; asking for after 2026-04-02 → no data
+            buf = __import__("io").StringIO()
+            old_stderr = __import__("sys").stderr
+            __import__("sys").stderr = buf
+            try:
+                rc = to.main(["analyze", p, "--source", "openclaw",
+                              "--since", "2026-04-02"])
+            finally:
+                __import__("sys").stderr = old_stderr
+            self.assertEqual(rc, 1)  # "no calls found"
+        finally:
+            tmp.cleanup()
+
+    def test_since_overrides_days(self):
+        # --since takes precedence; if since is in the future, no calls returned
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = __import__("io").StringIO()
+            old_stderr = __import__("sys").stderr
+            __import__("sys").stderr = buf
+            try:
+                rc = to.main(["analyze", p, "--source", "openclaw",
+                              "--since", "2030-01-01", "--days", "9999"])
+            finally:
+                __import__("sys").stderr = old_stderr
+            self.assertEqual(rc, 1)
+        finally:
+            tmp.cleanup()
+
+    def test_since_invalid_format_returns_2(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = __import__("io").StringIO()
+            old_stderr = __import__("sys").stderr
+            __import__("sys").stderr = buf
+            try:
+                rc = to.main(["analyze", p, "--since", "not-a-date"])
+            finally:
+                __import__("sys").stderr = old_stderr
+            self.assertEqual(rc, 2)
+        finally:
+            tmp.cleanup()
+
+
 class CLIIntegrationTests(unittest.TestCase):
     def test_analyze_markdown(self):
         tmp = tempfile.TemporaryDirectory()
