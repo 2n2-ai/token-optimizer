@@ -1,36 +1,36 @@
 # Token Optimizer — Itemized Receipt
 
-_Generated 2026-04-14 14:07 UTC_
+_Generated 2026-04-16 14:01 UTC_
 
 Your AI bill has no itemization. **This is the itemized receipt.**
 
 ## Summary
 
-- **Total spend:** $313.35
-- **API calls:** 4,734
-- **Input tokens:** 1,760,683
-- **Output tokens:** 1,013,872
-- **Cache reads:** 269,633,675
-- **Cache writes:** 22,495,962
-- **Cache hit rate:** 91.8%
-- **Window:** 2026-04-01 16:37 → 2026-04-14 14:07
+- **Total spend:** $1,807.56
+- **API calls:** 12,551
+- **Input tokens:** 4,371,917
+- **Output tokens:** 3,039,968
+- **Cache reads:** 1,079,928,973
+- **Cache writes:** 83,407,417
+- **Cache hit rate:** 92.5%
+- **Window:** 2026-04-01 16:37 → 2026-04-16 14:01
 
 ## Spend by source
 
 | Source | Calls | Cost |
 |---|---:|---:|
-| openclaw | 3,340 | $266.76 |
-| claude-code | 1,343 | $46.17 |
+| openclaw | 7,227 | $1,525.91 |
+| claude-code | 5,273 | $281.23 |
 | sqlite | 51 | $0.42 |
 
 ## Spend by model
 
 | Model | Calls | Input | Output | Cache R | Cache W | Cost | Cost/call | Share |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `claude-opus-4-6` | 3,195 | 4,051 | 777,600 | 237,869,177 | 16,465,273 | $291.52 | $0.09 | 93.0% |
-| `claude-sonnet-4-6` | 581 | 316 | 75,692 | 14,975,623 | 2,368,047 | $14.51 | $0.02 | 4.6% |
-| `claude-haiku-4-5` | 550 | 8,509 | 126,347 | 16,788,875 | 3,662,642 | $6.90 | $0.01 | 2.2% |
-| `free/gpt-oss-120b` | 43 | 616,679 | 0 | 0 | 0 | $0.37 | $0.0087 | 0.1% |
+| `claude-opus-4-6` | 8,956 | 68,642 | 2,141,262 | 944,785,693 | 64,073,203 | $1,707.42 | $0.19 | 94.5% |
+| `claude-sonnet-4-6` | 1,731 | 5,496 | 575,926 | 99,896,509 | 11,352,436 | $85.05 | $0.05 | 4.7% |
+| `claude-haiku-4-5` | 1,185 | 37,483 | 225,357 | 35,246,771 | 7,981,778 | $14.67 | $0.01 | 0.8% |
+| `free/gpt-oss-120b` | 43 | 616,679 | 0 | 0 | 0 | $0.37 | $0.0087 | 0.0% |
 | `google/gemini-3.1-flash-lite` | 5 | 71,693 | 0 | 0 | 0 | $0.05 | $0.0097 | 0.0% |
 
 _(8 model(s) with $0 cost hidden: `delivery-mirror`, `google/gemini-2.5-pro`, `<synthetic>`, `gateway-injected`, `free`, `free/deepseek-v3.2`, `gemma4`, `anthropic/claude-opus-4.6`)_
@@ -39,42 +39,44 @@ _(8 model(s) with $0 cost hidden: `delivery-mirror`, `google/gemini-2.5-pro`, `<
 
 | Date | Calls | Cost | |
 |---|---:|---:|---|
-| 2026-04-01 | 706 | $22.50 | ███ |
-| 2026-04-02 | 694 | $12.37 | ██ |
+| 2026-04-01 | 706 | $22.50 | █ |
+| 2026-04-02 | 694 | $12.37 | █ |
 | 2026-04-03 | 704 | $6.90 | █ |
 | 2026-04-04 | 94 | $4.94 | █ |
-| 2026-04-05 | 247 | $10.54 | █ |
-| 2026-04-06 | 1,112 | $137.75 | ████████████████████████ |
+| 2026-04-05 | 303 | $13.76 | █ |
+| 2026-04-06 | 1,400 | $177.11 | ███ |
 | 2026-04-07 | 6 | $1.64 | █ |
-| 2026-04-14 | 1,171 | $116.72 | ████████████████████ |
+| 2026-04-14 | 5,360 | $1,399.05 | ████████████████████████ |
+| 2026-04-15 | 1,314 | $79.95 | █ |
+| 2026-04-16 | 1,970 | $89.36 | █ |
 
 ## Top 10 most expensive calls
 
 | # | When | Model | In | Out | Cache R | Cache W | Cost |
 |---:|---|---|---:|---:|---:|---:|---:|
-| 1 | 2026-04-14T14:01:19 | `claude-opus-4-6` | 3 | 197 | 0 | 167,017 | $3.15 |
-| 2 | 2026-04-14T14:06:59 | `claude-opus-4-6` | 3 | 108 | 0 | 167,373 | $3.15 |
-| 3 | 2026-04-14T13:46:29 | `claude-opus-4-6` | 3 | 92 | 0 | 159,854 | $3.00 |
-| 4 | 2026-04-14T13:40:38 | `claude-opus-4-6` | 3 | 76 | 0 | 154,239 | $2.90 |
-| 5 | 2026-04-14T13:22:15 | `claude-opus-4-6` | 3 | 183 | 0 | 131,469 | $2.48 |
-| 6 | 2026-04-14T03:46:32 | `claude-opus-4-6` | 3 | 120 | 23,847 | 102,521 | $1.97 |
-| 7 | 2026-04-14T03:19:49 | `claude-opus-4-6` | 3 | 133 | 0 | 99,471 | $1.88 |
-| 8 | 2026-04-14T03:29:15 | `claude-opus-4-6` | 3 | 142 | 23,847 | 86,656 | $1.67 |
-| 9 | 2026-04-14T03:04:31 | `claude-opus-4-6` | 3 | 182 | 6,994 | 79,560 | $1.52 |
-| 10 | 2026-04-06T19:58:50 | `claude-opus-4-6` | 3 | 127 | 0 | 215,345 | $1.35 |
+| 1 | 2026-04-14T17:02:44 | `claude-opus-4-6` | 3 | 173 | 0 | 303,654 | $5.71 |
+| 2 | 2026-04-14T17:02:44 | `claude-opus-4-6` | 3 | 173 | 0 | 303,654 | $5.71 |
+| 3 | 2026-04-14T17:51:57 | `claude-opus-4-6` | 3 | 173 | 0 | 303,654 | $5.71 |
+| 4 | 2026-04-14T17:51:57 | `claude-opus-4-6` | 3 | 173 | 0 | 303,654 | $5.71 |
+| 5 | 2026-04-14T17:12:03 | `claude-opus-4-6` | 3 | 150 | 0 | 303,249 | $5.70 |
+| 6 | 2026-04-14T17:12:03 | `claude-opus-4-6` | 3 | 150 | 0 | 303,249 | $5.70 |
+| 7 | 2026-04-14T17:51:57 | `claude-opus-4-6` | 3 | 150 | 0 | 303,249 | $5.70 |
+| 8 | 2026-04-14T17:51:57 | `claude-opus-4-6` | 3 | 150 | 0 | 303,249 | $5.70 |
+| 9 | 2026-04-14T16:59:02 | `claude-opus-4-6` | 3 | 158 | 5,539 | 290,653 | $5.47 |
+| 10 | 2026-04-14T16:59:02 | `claude-opus-4-6` | 3 | 158 | 5,539 | 290,653 | $5.47 |
 
 ## Savings teaser
 
-If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $185.74 vs your actual $313.35. You're spending **$127.61** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
+If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $695.47 vs your actual $1,807.56. You're spending **$1,112.09** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
 
-**2,873** of your calls produced ≤200 output tokens, which means they were probably safe to run on the next tier down. Routing them that way would have cost $210.08 instead of $313.35 — a savings of **$103.27**.
+**7,238** of your calls produced ≤200 output tokens, which means they were probably safe to run on the next tier down. Routing them that way would have cost $956.70 instead of $1,807.56 — a savings of **$850.86**.
 
 _This is a heuristic. Phase 2 ships a real classifier and per-call recommendations._
 
 ## Sources read
 
-- **openclaw**: 48 file(s)
-- **claude-code**: 24 file(s)
+- **openclaw**: 86 file(s)
+- **claude-code**: 79 file(s)
 - **sqlite**: 1 file(s)
 
 ---
