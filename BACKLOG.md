@@ -44,7 +44,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [x] ClawHub `SKILL.md` that wraps `token-optimizer analyze`. ✅ (2026-04-15)
 - [ ] ClawMart free listing (compete with Milo Security's 2.8KB checklist).
 - [x] Coldpress landing page with embedded live `FIRST_REPORT.md`. ✅ (2026-04-15, page.tsx parses live report dynamically, falls back to hardcoded data)
-- [ ] Cron job: regenerate `FIRST_REPORT.md` nightly, push to landing.
+- [x] Cron job: regenerate `FIRST_REPORT.md` nightly, push to landing. ✅ (2026-04-16, scripts/refresh-landing.sh + macOS LaunchAgent at 4am daily)
 - [ ] Launch tweet thread with our own numbers.
 
 ## 🟣 Phase 2 — Recommendations (~2-3 weeks)
