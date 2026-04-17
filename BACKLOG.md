@@ -52,7 +52,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [ ] Re-import `archive/proxy-v1/classifier.py`, retrain on our own data.
 - [ ] Replace heuristic `output ≤ 200` downshift with classifier output.
 - [ ] Per-call `tier_recommended` field in JSON output.
-- [ ] Cache opportunity score: which calls would have benefited from caching.
+- [x] Cache opportunity score: which calls would have benefited from caching. ✅ (2026-04-17, v0.3.3, in aggregate() + markdown, 5 new tests)
 - [x] `token-optimizer waste` subcommand: top 5 waste sources with examples. ✅ (2026-04-17, v0.3.2, 5 new tests, runs on real data: $845.91 recoverable)
 - [ ] `token-optimizer digest --weekly` subcommand: emit Markdown/Slack/email.
 - [ ] First paid feature: weekly digest auto-emailed to a user-supplied address.

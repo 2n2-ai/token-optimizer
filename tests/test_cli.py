@@ -278,6 +278,90 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(warnings.count("totally-fake-model"), 1)
 
 
+class CacheOpportunityTests(unittest.TestCase):
+    """Tests for the cache_opportunity score in aggregate()."""
+
+    def _make_call(self, input_tokens, cache_read_tokens, model="claude-opus-4-6"):
+        from datetime import datetime, timezone
+        return to.Call(
+            ts=datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc),
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=100,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=0,
+            cost=0.01,
+            source="openclaw",
+            session_id="s1",
+        )
+
+    def test_large_uncached_input_scores_opportunity(self):
+        """A call with input >= 1024 and no cache reads should show opportunity."""
+        calls = [self._make_call(input_tokens=10_000, cache_read_tokens=0)]
+        agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+        co = agg["cache_opportunity"]
+        self.assertEqual(co["eligible_calls"], 1)
+        self.assertEqual(co["eligible_input_tokens"], 10_000)
+        self.assertGreater(co["potential_saving"], 0)
+        # Saving = 10000 * (5.00 - 0.50) / 1_000_000 = $0.045
+        self.assertAlmostEqual(co["potential_saving"], 0.045, places=4)
+
+    def test_cached_call_not_eligible(self):
+        """A call that already has cache reads is not an opportunity."""
+        calls = [self._make_call(input_tokens=10_000, cache_read_tokens=50_000)]
+        agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+        co = agg["cache_opportunity"]
+        self.assertEqual(co["eligible_calls"], 0)
+        self.assertEqual(co["potential_saving"], 0.0)
+
+    def test_small_input_below_threshold_not_eligible(self):
+        """Calls below the 1024-token threshold are not cache-eligible."""
+        calls = [self._make_call(input_tokens=512, cache_read_tokens=0)]
+        agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+        co = agg["cache_opportunity"]
+        self.assertEqual(co["eligible_calls"], 0)
+
+    def test_unknown_model_excluded_from_opportunity(self):
+        """Unknown models have no pricing so contribute $0 opportunity."""
+        calls = [self._make_call(input_tokens=10_000, cache_read_tokens=0,
+                                 model="unknown-model-xyz")]
+        agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+        co = agg["cache_opportunity"]
+        # No pricing → no saving counted, but call may still be counted eligible
+        self.assertEqual(co["potential_saving"], 0.0)
+
+    def test_opportunity_appears_in_markdown(self):
+        """Cache opportunity section renders in markdown when saving > 0."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            # craft a fixture with a large-input, uncached call
+            records = [
+                {
+                    "type": "message",
+                    "id": "m1",
+                    "timestamp": "2026-04-01T12:00:00.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "usage": {
+                            "input": 5000, "output": 100,
+                            "cacheRead": 0, "cacheWrite": 0,
+                            "cost": {"total": 0.03},
+                        },
+                    },
+                }
+            ]
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, records)
+            calls = list(to.parse_openclaw_session(p))
+            agg = to.aggregate(calls, baseline="claude-sonnet-4-6")
+            md = to.render_markdown(agg, [("openclaw", p)])
+            self.assertIn("Cache opportunity", md)
+            self.assertIn("cache-read", md)
+        finally:
+            tmp.cleanup()
+
+
 class WasteSubcommandTests(unittest.TestCase):
     """Tests for the `waste` subcommand."""
 

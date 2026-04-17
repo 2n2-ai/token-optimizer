@@ -37,7 +37,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.3.2"
+__version__ = "0.3.3"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -83,6 +83,10 @@ TIER_DOWNSHIFT = {
 # this output-token count are treated as candidates for the next tier down.
 # Conservative: short outputs are usually cheap-tier-safe.
 DOWNSHIFT_OUTPUT_CEIL = 200
+
+# Minimum input tokens for a call to be considered cache-eligible.
+# Claude requires ≥1024 tokens in the cacheable prefix for Opus/Sonnet.
+CACHE_MIN_INPUT_TOKENS = 1024
 
 
 # ---------------------------------------------------------------------------
@@ -620,6 +624,22 @@ def aggregate(calls: List[Call], baseline: str, top_n: int = 10) -> Dict[str, An
         else:
             downshift_cost += c.cost
 
+    # Cache opportunity score: calls that had no cache reads but enough input
+    # tokens to have been cache-eligible. The saving is the delta between what
+    # those input tokens cost vs. what they'd cost as cache reads.
+    cache_opp_calls = 0
+    cache_opp_input_tokens = 0
+    cache_opp_saving = 0.0
+    for c in calls:
+        if c.cache_read_tokens == 0 and c.input_tokens >= CACHE_MIN_INPUT_TOKENS:
+            p = PRICING.get(normalize_model(c.model))
+            if p:
+                actual_input_cost = c.input_tokens * p["input"] / 1_000_000
+                cached_input_cost = c.input_tokens * p["cache_read"] / 1_000_000
+                cache_opp_calls += 1
+                cache_opp_input_tokens += c.input_tokens
+                cache_opp_saving += actual_input_cost - cached_input_cost
+
     return {
         "summary": {
             "total_cost": round(total_cost, 4),
@@ -652,6 +672,12 @@ def aggregate(calls: List[Call], baseline: str, top_n: int = 10) -> Dict[str, An
             "downshift_cost_if_routed": round(downshift_cost, 4),
             "downshift_savings": round(total_cost - downshift_cost, 4),
             "downshift_output_ceiling_tokens": DOWNSHIFT_OUTPUT_CEIL,
+        },
+        "cache_opportunity": {
+            "eligible_calls": cache_opp_calls,
+            "eligible_input_tokens": cache_opp_input_tokens,
+            "potential_saving": round(cache_opp_saving, 4),
+            "min_input_tokens_threshold": CACHE_MIN_INPUT_TOKENS,
         },
     }
 
@@ -810,6 +836,23 @@ def render_markdown(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
         lines.append(
             "_This is a heuristic. Phase 2 ships a real classifier and per-call "
             "recommendations._"
+        )
+        lines.append("")
+
+    co = agg.get("cache_opportunity", {})
+    if co.get("eligible_calls", 0) > 0 and co.get("potential_saving", 0.0) > 0:
+        lines.append("## Cache opportunity")
+        lines.append("")
+        lines.append(
+            f"**{fmt_int(co['eligible_calls'])}** calls had ≥{co['min_input_tokens_threshold']} "
+            f"input tokens but zero cache reads ({fmt_int(co['eligible_input_tokens'])} "
+            f"total uncached input tokens). If those inputs had been cache-read instead, "
+            f"you'd have saved **{fmt_money(co['potential_saving'])}**."
+        )
+        lines.append("")
+        lines.append(
+            "_Enable prompt caching in your orchestrator to convert these input costs "
+            "to cache-read costs (~10% of input price)._"
         )
         lines.append("")
 
