@@ -13,6 +13,8 @@ Usage:
     token-optimizer analyze --format json
     token-optimizer analyze --days 7
     token-optimizer analyze --since 2026-04-01
+    token-optimizer waste                        # top waste sources
+    token-optimizer waste --days 7 --format json
 
 If no PATH is given, the CLI scans well-known locations:
 
@@ -35,7 +37,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -831,6 +833,176 @@ def render_markdown(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def analyze_waste(calls: List[Call]) -> Dict[str, Any]:
+    """Identify the top waste patterns across a call set.
+
+    Returns a dict with:
+      tier_overshoot  — expensive model used for short-output tasks
+      cold_cache      — large cache writes with zero cache reads (unread warm-ups)
+      summary         — aggregate numbers
+    """
+    overshoot: List[Dict[str, Any]] = []
+    cold_cache: List[Dict[str, Any]] = []
+
+    for c in calls:
+        cheaper = TIER_DOWNSHIFT.get(c.model)
+        if cheaper and c.output_tokens <= DOWNSHIFT_OUTPUT_CEIL:
+            cheaper_cost = price_call(
+                cheaper,
+                input_tokens=c.input_tokens,
+                output_tokens=c.output_tokens,
+                cache_read_tokens=c.cache_read_tokens,
+                cache_write_tokens=c.cache_write_tokens,
+            )
+            wasted = c.cost - cheaper_cost
+            if wasted > 0:
+                overshoot.append({
+                    "timestamp": c.ts.isoformat(),
+                    "model": c.model,
+                    "cheaper_model": cheaper,
+                    "output_tokens": c.output_tokens,
+                    "actual_cost": round(c.cost, 6),
+                    "cheaper_cost": round(cheaper_cost, 6),
+                    "wasted": round(wasted, 6),
+                    "session_id": c.session_id,
+                })
+
+        if c.cache_write_tokens > 0 and c.cache_read_tokens == 0:
+            cold_cache.append({
+                "timestamp": c.ts.isoformat(),
+                "model": c.model,
+                "cache_write_tokens": c.cache_write_tokens,
+                "cost": round(c.cost, 6),
+                "session_id": c.session_id,
+            })
+
+    overshoot.sort(key=lambda r: r["wasted"], reverse=True)
+    cold_cache.sort(key=lambda r: r["cache_write_tokens"], reverse=True)
+
+    total_overshoot_waste = sum(r["wasted"] for r in overshoot)
+    total_cold_cache_tokens = sum(r["cache_write_tokens"] for r in cold_cache)
+
+    return {
+        "summary": {
+            "total_calls": len(calls),
+            "tier_overshoot_calls": len(overshoot),
+            "tier_overshoot_waste": round(total_overshoot_waste, 4),
+            "cold_cache_calls": len(cold_cache),
+            "cold_cache_write_tokens": total_cold_cache_tokens,
+        },
+        "tier_overshoot": overshoot[:5],
+        "cold_cache": cold_cache[:5],
+    }
+
+
+def render_waste_markdown(waste: Dict[str, Any]) -> str:
+    s = waste["summary"]
+    lines: List[str] = []
+    lines.append("# Token Optimizer — Waste Report")
+    lines.append("")
+    lines.append(
+        f"_Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}_"
+    )
+    lines.append("")
+    lines.append("## Summary")
+    lines.append("")
+    lines.append(f"- **Total calls analyzed:** {fmt_int(s['total_calls'])}")
+    lines.append(
+        f"- **Tier-overshoot calls:** {fmt_int(s['tier_overshoot_calls'])} "
+        f"({s['tier_overshoot_calls'] / s['total_calls'] * 100:.1f}% of calls)"
+        if s['total_calls'] else f"- **Tier-overshoot calls:** 0"
+    )
+    lines.append(
+        f"- **Recoverable from tier routing:** {fmt_money(s['tier_overshoot_waste'])}"
+    )
+    lines.append(
+        f"- **Cold cache-write calls:** {fmt_int(s['cold_cache_calls'])} "
+        f"({fmt_int(s['cold_cache_write_tokens'])} tokens written, never read back)"
+    )
+    lines.append("")
+
+    lines.append("## Waste category 1: Tier overshoot")
+    lines.append("")
+    lines.append(
+        "These calls used an expensive model but produced ≤200 output tokens — "
+        "short enough that the next tier down would almost certainly have worked."
+    )
+    lines.append("")
+    if waste["tier_overshoot"]:
+        lines.append("**Top 5 overshoot calls by wasted cost:**")
+        lines.append("")
+        lines.append("| When | Model → Cheaper | Output | Actual | Would cost | Wasted |")
+        lines.append("|---|---|---:|---:|---:|---:|")
+        for r in waste["tier_overshoot"]:
+            lines.append(
+                f"| {r['timestamp'][:19]} "
+                f"| `{r['model']}` → `{r['cheaper_model']}` "
+                f"| {fmt_int(r['output_tokens'])} tok "
+                f"| {fmt_money(r['actual_cost'])} "
+                f"| {fmt_money(r['cheaper_cost'])} "
+                f"| **{fmt_money(r['wasted'])}** |"
+            )
+        lines.append("")
+        lines.append(
+            f"**Total recoverable:** {fmt_money(s['tier_overshoot_waste'])} "
+            f"across {fmt_int(s['tier_overshoot_calls'])} calls."
+        )
+    else:
+        lines.append("_No tier-overshoot calls found._")
+    lines.append("")
+
+    lines.append("## Waste category 2: Cold cache writes")
+    lines.append("")
+    lines.append(
+        "These calls wrote tokens into the cache but read zero tokens back — "
+        "the cache was warmed but never hit within the analysis window."
+    )
+    lines.append("")
+    if waste["cold_cache"]:
+        lines.append("**Top 5 cold-cache calls by tokens written:**")
+        lines.append("")
+        lines.append("| When | Model | Cache written | Call cost |")
+        lines.append("|---|---|---:|---:|")
+        for r in waste["cold_cache"]:
+            lines.append(
+                f"| {r['timestamp'][:19]} "
+                f"| `{r['model']}` "
+                f"| {fmt_int(r['cache_write_tokens'])} tok "
+                f"| {fmt_money(r['cost'])} |"
+            )
+        lines.append("")
+        lines.append(
+            "_Note: cold cache writes are not always waste — a write in one session "
+            "may be read in the next. This flags calls with no same-session benefit._"
+        )
+    else:
+        lines.append("_No cold cache-write calls found._")
+    lines.append("")
+
+    lines.append("## What to do")
+    lines.append("")
+    lines.append(
+        "1. **Route short-output tasks to a cheaper model.** "
+        "ClawRouter (Phase 2) will do this automatically. "
+        "For now, check if your orchestrator can use Sonnet/Haiku for quick lookups."
+    )
+    lines.append(
+        "2. **Check cold cache sessions.** If a session warms the cache but gets "
+        "killed before the next call, that write cost is unrecoverable. "
+        "Longer-lived sessions amortize cache write costs better."
+    )
+    lines.append("")
+    lines.append("_Phase 2 adds a real classifier and per-call `tier_recommended` field._")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "_Generated by [token-optimizer](https://github.com/2n2-ai/token-optimizer) — "
+        "read-only, local-only, no API keys, no daemon._"
+    )
+    return "\n".join(lines)
+
+
 def render_json(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
     payload = {
         "version": __version__,
@@ -857,18 +1029,12 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         )
         return 2
 
-    since: Optional[datetime] = None
     if getattr(args, "since", None):
-        try:
-            since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-        except ValueError:
-            print(
-                f"error: --since must be YYYY-MM-DD, got '{args.since}'",
-                file=sys.stderr,
-            )
+        since = _parse_since(args)
+        if since is None:
             return 2
-    elif args.days and args.days > 0:
-        since = datetime.now(timezone.utc) - timedelta(days=args.days)
+    else:
+        since = _parse_since(args)
 
     calls = load_calls(sources, since)
     if not calls:
@@ -884,6 +1050,73 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         out = render_markdown(agg, sources)
 
     if args.output:
+        with open(os.path.expanduser(args.output), "w") as fh:
+            fh.write(out)
+            if not out.endswith("\n"):
+                fh.write("\n")
+    else:
+        print(out)
+    return 0
+
+
+def _parse_since(args: argparse.Namespace) -> Optional[datetime]:
+    """Shared --since / --days resolution for analyze and waste commands."""
+    if getattr(args, "since", None):
+        try:
+            return datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(
+                f"error: --since must be YYYY-MM-DD, got '{args.since}'",
+                file=sys.stderr,
+            )
+            return None  # caller checks
+    days = getattr(args, "days", 0)
+    if days and days > 0:
+        return datetime.now(timezone.utc) - timedelta(days=days)
+    return None
+
+
+def cmd_waste(args: argparse.Namespace) -> int:
+    sources = discover_sources(args.path, args.source)
+    if not sources:
+        print(
+            "no sources found. Try passing a path, or check that one of these exists:\n"
+            f"  {DEFAULT_OPENCLAW_GLOB}\n"
+            f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
+            f"  {DEFAULT_SQLITE_PATH}",
+            file=sys.stderr,
+        )
+        return 2
+
+    if getattr(args, "since", None):
+        since = _parse_since(args)
+        if since is None:
+            return 2
+    else:
+        since = _parse_since(args)
+
+    calls = load_calls(sources, since)
+    if not calls:
+        print("no calls found in the selected sources/window.", file=sys.stderr)
+        return 1
+    calls.sort(key=lambda c: c.ts)
+
+    waste = analyze_waste(calls)
+
+    if getattr(args, "format", "markdown") == "json":
+        out = json.dumps(
+            {
+                "version": __version__,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                **waste,
+            },
+            indent=2,
+            default=str,
+        )
+    else:
+        out = render_waste_markdown(waste)
+
+    if getattr(args, "output", None):
         with open(os.path.expanduser(args.output), "w") as fh:
             fh.write(out)
             if not out.endswith("\n"):
@@ -930,6 +1163,21 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--output", "-o", default=None,
                    help="Write report to a file instead of stdout.")
     a.set_defaults(func=cmd_analyze)
+
+    w = sub.add_parser("waste", help="Show top waste patterns: tier overshoot and cold cache writes.")
+    w.add_argument("path", nargs="?", default=None,
+                   help="Path to a file or directory. Default: scan known locations.")
+    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+                   default=None, help="Restrict scan to one source kind.")
+    w.add_argument("--days", type=int, default=0,
+                   help="Only include calls within the last N days. 0 = all time.")
+    w.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                   help="Only include calls on or after this date (UTC).")
+    w.add_argument("--format", choices=["markdown", "json"], default="markdown",
+                   help="Output format. Default: markdown.")
+    w.add_argument("--output", "-o", default=None,
+                   help="Write report to a file instead of stdout.")
+    w.set_defaults(func=cmd_waste)
 
     s = sub.add_parser("sources", help="Print which log sources would be read.")
     s.add_argument("path", nargs="?", default=None)

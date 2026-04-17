@@ -53,7 +53,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [ ] Replace heuristic `output ≤ 200` downshift with classifier output.
 - [ ] Per-call `tier_recommended` field in JSON output.
 - [ ] Cache opportunity score: which calls would have benefited from caching.
-- [ ] `token-optimizer waste` subcommand: top 5 waste sources with examples.
+- [x] `token-optimizer waste` subcommand: top 5 waste sources with examples. ✅ (2026-04-17, v0.3.2, 5 new tests, runs on real data: $845.91 recoverable)
 - [ ] `token-optimizer digest --weekly` subcommand: emit Markdown/Slack/email.
 - [ ] First paid feature: weekly digest auto-emailed to a user-supplied address.
 - [ ] `token-optimizer watch` (re-runs on log change, prints delta).

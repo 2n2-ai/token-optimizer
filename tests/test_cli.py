@@ -278,6 +278,135 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(warnings.count("totally-fake-model"), 1)
 
 
+class WasteSubcommandTests(unittest.TestCase):
+    """Tests for the `waste` subcommand."""
+
+    def _write_fixture(self, tmp, records):
+        p = os.path.join(tmp, "s.jsonl")
+        _write_jsonl(p, records)
+        return p
+
+    def test_waste_basic_markdown(self):
+        """waste command runs and produces a Waste Report."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._write_fixture(tmp.name, OPENCLAW_SAMPLE)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["waste", p, "--source", "openclaw"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("Waste Report", out)
+            self.assertIn("Tier overshoot", out)
+            self.assertIn("Cold cache", out)
+        finally:
+            tmp.cleanup()
+
+    def test_waste_json_output(self):
+        """waste --format json returns valid JSON with expected keys."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._write_fixture(tmp.name, OPENCLAW_SAMPLE)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["waste", p, "--source", "openclaw", "--format", "json"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            data = json.loads(buf.getvalue())
+            self.assertIn("summary", data)
+            self.assertIn("tier_overshoot", data)
+            self.assertIn("cold_cache", data)
+        finally:
+            tmp.cleanup()
+
+    def test_waste_detects_tier_overshoot(self):
+        """A cheap-output Opus call should appear in tier_overshoot."""
+        records = [
+            {
+                "type": "message",
+                "id": "m1",
+                "timestamp": "2026-04-01T12:00:00.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-6",
+                    "usage": {
+                        # 50 output tokens — well under DOWNSHIFT_OUTPUT_CEIL
+                        "input": 100, "output": 50,
+                        "cacheRead": 0, "cacheWrite": 0,
+                        "cost": {"total": 0.003},
+                    },
+                },
+            }
+        ]
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._write_fixture(tmp.name, records)
+            waste = to.analyze_waste(list(to.parse_openclaw_session(p)))
+            self.assertEqual(waste["summary"]["tier_overshoot_calls"], 1)
+            self.assertGreater(waste["summary"]["tier_overshoot_waste"], 0)
+            self.assertEqual(waste["tier_overshoot"][0]["cheaper_model"], "claude-sonnet-4-6")
+        finally:
+            tmp.cleanup()
+
+    def test_waste_detects_cold_cache(self):
+        """A call with cache writes but zero reads is a cold cache write."""
+        records = [
+            {
+                "type": "message",
+                "id": "m1",
+                "timestamp": "2026-04-01T12:00:00.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-6",
+                    "usage": {
+                        "input": 10, "output": 500,
+                        "cacheRead": 0, "cacheWrite": 50000,
+                        "cost": {"total": 0.50},
+                    },
+                },
+            }
+        ]
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._write_fixture(tmp.name, records)
+            waste = to.analyze_waste(list(to.parse_openclaw_session(p)))
+            self.assertEqual(waste["summary"]["cold_cache_calls"], 1)
+            self.assertEqual(waste["cold_cache"][0]["cache_write_tokens"], 50000)
+        finally:
+            tmp.cleanup()
+
+    def test_waste_no_overshoot_for_high_output(self):
+        """Calls with output > DOWNSHIFT_OUTPUT_CEIL should NOT be flagged."""
+        records = [
+            {
+                "type": "message",
+                "id": "m1",
+                "timestamp": "2026-04-01T12:00:00.000Z",
+                "message": {
+                    "role": "assistant",
+                    "model": "claude-opus-4-6",
+                    "usage": {
+                        "input": 100, "output": 1000,  # > 200 ceiling
+                        "cacheRead": 0, "cacheWrite": 0,
+                        "cost": {"total": 0.03},
+                    },
+                },
+            }
+        ]
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._write_fixture(tmp.name, records)
+            waste = to.analyze_waste(list(to.parse_openclaw_session(p)))
+            self.assertEqual(waste["summary"]["tier_overshoot_calls"], 0)
+        finally:
+            tmp.cleanup()
+
+
 class SinceFlagTests(unittest.TestCase):
     """Tests for --since YYYY-MM-DD absolute date filter."""
 

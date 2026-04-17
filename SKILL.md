@@ -18,6 +18,8 @@ Use this skill when the user asks:
 - "Which model is costing me the most?"
 - "Run token-optimizer"
 - "Show me the receipt"
+- "Where am I wasting money on AI?"
+- "Show me waste" / "token-optimizer waste"
 
 ## Setup check
 
@@ -36,6 +38,20 @@ If not on PATH, use the full path: `python3 <repo>/src/token_optimizer.py`
 ```sh
 token-optimizer analyze
 ```
+
+### Waste report (where money is being thrown away)
+
+```sh
+token-optimizer waste           # all time
+token-optimizer waste --days 7  # last 7 days
+token-optimizer waste --format json
+```
+
+The waste report shows:
+- **Tier overshoot**: Calls on expensive models (Opus) with short outputs — could have used Sonnet/Haiku
+- **Cold cache writes**: Cache was written but never read back within the window
+
+
 
 This reads from all default locations:
 - `~/.openclaw/agents/*/sessions/*.jsonl` (OpenClaw)
