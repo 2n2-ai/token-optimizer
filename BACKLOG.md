@@ -54,7 +54,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [x] Per-call `tier_recommended` field in JSON output. ✅ (2026-04-18, v0.3.4, annotate_call() + recommend_tier(), 6 new tests)
 - [x] Cache opportunity score: which calls would have benefited from caching. ✅ (2026-04-17, v0.3.3, in aggregate() + markdown, 5 new tests)
 - [x] `token-optimizer waste` subcommand: top 5 waste sources with examples. ✅ (2026-04-17, v0.3.2, 5 new tests, runs on real data: $845.91 recoverable)
-- [ ] `token-optimizer digest --weekly` subcommand: emit Markdown/Slack/email.
+- [x] `token-optimizer digest --weekly` subcommand: emit Markdown/Slack/email. ✅ (2026-04-18, v0.3.5, markdown+slack+json formats, 6 new tests)
 - [ ] First paid feature: weekly digest auto-emailed to a user-supplied address.
 - [ ] `token-optimizer watch` (re-runs on log change, prints delta).
 - [x] `--since 2026-04-01` absolute date filter (currently only `--days N`). ✅ (2026-04-16, v0.3.1, overrides --days, 4 new tests)

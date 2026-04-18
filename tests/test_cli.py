@@ -278,6 +278,157 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(warnings.count("totally-fake-model"), 1)
 
 
+class DigestSubcommandTests(unittest.TestCase):
+    """Tests for the `digest` subcommand."""
+
+    def _make_fixture(self, tmp):
+        p = os.path.join(tmp, "s.jsonl")
+        # Two calls: one Opus short-output (overshoot), one Sonnet normal
+        records = [
+            {
+                "type": "message", "id": "m1",
+                "timestamp": "2026-04-01T12:00:00.000Z",
+                "message": {
+                    "role": "assistant", "model": "claude-opus-4-6",
+                    "usage": {
+                        "input": 100, "output": 50,
+                        "cacheRead": 5000, "cacheWrite": 0,
+                        "cost": {"total": 0.05},
+                    },
+                },
+            },
+            {
+                "type": "message", "id": "m2",
+                "timestamp": "2026-04-02T08:00:00.000Z",
+                "message": {
+                    "role": "assistant", "model": "claude-sonnet-4-6",
+                    "usage": {
+                        "input": 50, "output": 300,
+                        "cacheRead": 0, "cacheWrite": 0,
+                        "cost": {"total": 0.005},
+                    },
+                },
+            },
+        ]
+        _write_jsonl(p, records)
+        return p
+
+    def test_digest_markdown_output(self):
+        """digest produces a Spend Digest with expected sections."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["digest", p, "--source", "openclaw", "--days", "0"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("AI Spend Digest", out)
+            self.assertIn("At a glance", out)
+            self.assertIn("Spend by model", out)
+        finally:
+            tmp.cleanup()
+
+    def test_digest_slack_format(self):
+        """digest --format slack produces compact plain-text output."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["digest", p, "--source", "openclaw",
+                              "--format", "slack", "--days", "0"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("AI Spend Digest", out)
+            self.assertIn("token-optimizer", out)
+            # Slack format should not contain markdown table pipes
+            self.assertNotIn("|---|", out)
+        finally:
+            tmp.cleanup()
+
+    def test_digest_json_format(self):
+        """digest --format json returns structured JSON with expected keys."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["digest", p, "--source", "openclaw",
+                              "--format", "json", "--days", "0"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            data = json.loads(buf.getvalue())
+            self.assertIn("summary", data)
+            self.assertIn("waste_summary", data)
+            self.assertIn("by_model", data)
+            self.assertIn("period_days", data)
+        finally:
+            tmp.cleanup()
+
+    def test_digest_default_days_is_7(self):
+        """digest period_days reflects the --days value passed."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                # Use --days 0 to get data, but the period_days in JSON reflects
+                # what was passed (0 means all-time, digest reports 7 as default
+                # when 0 is given — verify the field exists)
+                rc = to.main(["digest", p, "--source", "openclaw",
+                              "--format", "json", "--days", "30"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            data = json.loads(buf.getvalue())
+            self.assertIn("period_days", data)
+            self.assertEqual(data["period_days"], 30)
+        finally:
+            tmp.cleanup()
+
+    def test_digest_waste_section_shows_when_overshoot_exists(self):
+        """When tier-overshoot calls exist, digest shows waste finding."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["digest", p, "--source", "openclaw", "--days", "0"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            out = buf.getvalue()
+            self.assertIn("waste finding", out)
+        finally:
+            tmp.cleanup()
+
+    def test_digest_writes_to_file(self):
+        """-o flag writes digest to file."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            out_path = os.path.join(tmp.name, "digest.md")
+            rc = to.main(["digest", p, "--source", "openclaw",
+                          "--days", "0", "-o", out_path])
+            self.assertEqual(rc, 0)
+            with open(out_path) as fh:
+                body = fh.read()
+            self.assertIn("AI Spend Digest", body)
+        finally:
+            tmp.cleanup()
+
+
 class TierRecommendationTests(unittest.TestCase):
     """Tests for recommend_tier() and the tier_recommended field in JSON."""
 

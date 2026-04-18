@@ -15,6 +15,8 @@ Usage:
     token-optimizer analyze --since 2026-04-01
     token-optimizer waste                        # top waste sources
     token-optimizer waste --days 7 --format json
+    token-optimizer digest                       # compact weekly summary
+    token-optimizer digest --days 30 --format slack
 
 If no PATH is given, the CLI scans well-known locations:
 
@@ -37,7 +39,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.3.4"
+__version__ = "0.3.5"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -1084,6 +1086,132 @@ def render_waste_markdown(waste: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_digest_markdown(
+    agg: Dict[str, Any],
+    waste: Dict[str, Any],
+    days: int,
+) -> str:
+    """Compact weekly/periodic digest — readable in 30 seconds."""
+    s = agg["summary"]
+    se = agg["savings_estimate"]
+    co = agg["cache_opportunity"]
+    ws = waste["summary"]
+
+    # Date window
+    first = (s["first_seen"] or "")[:10]
+    last = (s["last_seen"] or "")[:10]
+    window_label = f"{first} → {last}" if first else f"last {days} days"
+
+    lines: List[str] = []
+    lines.append("# AI Spend Digest")
+    lines.append("")
+    lines.append(f"**Period:** {window_label}  ")
+    lines.append(
+        f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+    )
+    lines.append("")
+
+    lines.append("## At a glance")
+    lines.append("")
+    lines.append(f"| Metric | Value |")
+    lines.append(f"|---|---|")
+    lines.append(f"| Total spend | **{fmt_money(s['total_cost'])}** |")
+    lines.append(f"| API calls | {fmt_int(s['total_calls'])} |")
+    lines.append(f"| Cache hit rate | {s['cache_hit_rate'] * 100:.1f}% |")
+    if se["downshift_savings"] > 0:
+        lines.append(f"| Tier waste (recoverable) | **{fmt_money(se['downshift_savings'])}** |")
+    if co["potential_saving"] > 0:
+        lines.append(f"| Cache opportunity | {fmt_money(co['potential_saving'])} |")
+    lines.append("")
+
+    # Top 3 models by cost
+    top_models = [r for r in agg["by_model"] if r["cost"] > 0][:3]
+    if top_models:
+        lines.append("## Spend by model")
+        lines.append("")
+        total_cost = s["total_cost"] or 1.0
+        for r in top_models:
+            share = r["cost"] / total_cost * 100
+            lines.append(
+                f"- **{r['model']}**: {fmt_money(r['cost'])} "
+                f"({share:.0f}% of spend, {fmt_int(r['calls'])} calls)"
+            )
+        lines.append("")
+
+    # Waste summary
+    if ws["tier_overshoot_calls"] > 0:
+        lines.append("## Top waste finding")
+        lines.append("")
+        lines.append(
+            f"**{fmt_int(ws['tier_overshoot_calls'])}** calls used an expensive model "
+            f"for short outputs (≤{DOWNSHIFT_OUTPUT_CEIL} tokens). "
+            f"Routing them to the next tier down would save "
+            f"**{fmt_money(ws['tier_overshoot_waste'])}**."
+        )
+        lines.append("")
+        if waste["tier_overshoot"]:
+            top_call = waste["tier_overshoot"][0]
+            lines.append(
+                f"_Example: {top_call['timestamp'][:16]} — "
+                f"`{top_call['model']}` produced {fmt_int(top_call['output_tokens'])} tokens "
+                f"for {fmt_money(top_call['actual_cost'])}. "
+                f"`{top_call['tier_recommended']}` would have cost {fmt_money(top_call['cheaper_cost'])}, "
+                f"saving {fmt_money(top_call['wasted'])}_"
+            )
+            lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    lines.append(
+        "_[token-optimizer](https://github.com/2n2-ai/token-optimizer) — "
+        "read-only, local-only, no API keys. "
+        "Run `token-optimizer analyze` for the full receipt._"
+    )
+    return "\n".join(lines)
+
+
+def render_digest_slack(
+    agg: Dict[str, Any],
+    waste: Dict[str, Any],
+    days: int,
+) -> str:
+    """Compact plain-text digest suitable for posting in Slack."""
+    s = agg["summary"]
+    se = agg["savings_estimate"]
+    ws = waste["summary"]
+
+    first = (s["first_seen"] or "")[:10]
+    last = (s["last_seen"] or "")[:10]
+    window_label = f"{first}–{last}" if first else f"last {days} days"
+
+    parts: List[str] = []
+    parts.append(f"*AI Spend Digest ({window_label})*")
+    parts.append(
+        f"*{fmt_money(s['total_cost'])}* across {fmt_int(s['total_calls'])} calls"
+    )
+
+    top_models = [r for r in agg["by_model"] if r["cost"] > 0][:2]
+    total_cost = s["total_cost"] or 1.0
+    for r in top_models:
+        share = r["cost"] / total_cost * 100
+        parts.append(
+            f"• {r['model']}: {fmt_money(r['cost'])} ({share:.0f}%)"
+        )
+
+    parts.append(f"• Cache hit rate: {s['cache_hit_rate'] * 100:.1f}%")
+
+    if ws["tier_overshoot_calls"] > 0:
+        parts.append(
+            f"• Tier waste: {fmt_money(ws['tier_overshoot_waste'])} recoverable "
+            f"({fmt_int(ws['tier_overshoot_calls'])} short-output calls on overpriced models)"
+        )
+    elif se["downshift_savings"] > 0:
+        parts.append(f"• Routing savings available: {fmt_money(se['downshift_savings'])}")
+
+    parts.append("_via token-optimizer — github.com/2n2-ai/token-optimizer_")
+    return "\n".join(parts)
+
+
 def render_json(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
     payload = {
         "version": __version__,
@@ -1207,6 +1335,64 @@ def cmd_waste(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_digest(args: argparse.Namespace) -> int:
+    sources = discover_sources(args.path, args.source)
+    if not sources:
+        print(
+            "no sources found. Try passing a path, or check that one of these exists:\n"
+            f"  {DEFAULT_OPENCLAW_GLOB}\n"
+            f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
+            f"  {DEFAULT_SQLITE_PATH}",
+            file=sys.stderr,
+        )
+        return 2
+
+    since = _parse_since(args)
+    if getattr(args, "since", None) and since is None:
+        return 2
+
+    calls = load_calls(sources, since)
+    if not calls:
+        print("no calls found in the selected sources/window.", file=sys.stderr)
+        return 1
+    calls.sort(key=lambda c: c.ts)
+
+    days = getattr(args, "days", 7)
+    agg = aggregate(calls, baseline=DEFAULT_BASELINE, top_n=5)
+    waste = analyze_waste(calls)
+
+    fmt = getattr(args, "format", "markdown")
+    if fmt == "json":
+        out = json.dumps(
+            {
+                "version": __version__,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "period_days": days,
+                "summary": agg["summary"],
+                "by_model": agg["by_model"][:3],
+                "savings_estimate": agg["savings_estimate"],
+                "cache_opportunity": agg["cache_opportunity"],
+                "waste_summary": waste["summary"],
+                "top_overshoot": waste["tier_overshoot"][:3],
+            },
+            indent=2,
+            default=str,
+        )
+    elif fmt == "slack":
+        out = render_digest_slack(agg, waste, days)
+    else:
+        out = render_digest_markdown(agg, waste, days)
+
+    if getattr(args, "output", None):
+        with open(os.path.expanduser(args.output), "w") as fh:
+            fh.write(out)
+            if not out.endswith("\n"):
+                fh.write("\n")
+    else:
+        print(out)
+    return 0
+
+
 def cmd_sources(args: argparse.Namespace) -> int:
     sources = discover_sources(args.path, args.source)
     if not sources:
@@ -1259,6 +1445,23 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--output", "-o", default=None,
                    help="Write report to a file instead of stdout.")
     w.set_defaults(func=cmd_waste)
+
+    dg = sub.add_parser("digest",
+                        help="Compact periodic summary — suitable for weekly email or Slack.")
+    dg.add_argument("path", nargs="?", default=None,
+                    help="Path to a file or directory. Default: scan known locations.")
+    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+                    default=None, help="Restrict scan to one source kind.")
+    dg.add_argument("--days", type=int, default=7,
+                    help="Number of days to cover. Default: 7 (weekly).")
+    dg.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="Only include calls on or after this date (UTC).")
+    dg.add_argument("--format", choices=["markdown", "slack", "json"],
+                    default="markdown",
+                    help="Output format: markdown (default), slack (plain text), json.")
+    dg.add_argument("--output", "-o", default=None,
+                    help="Write digest to a file instead of stdout.")
+    dg.set_defaults(func=cmd_digest)
 
     s = sub.add_parser("sources", help="Print which log sources would be read.")
     s.add_argument("path", nargs="?", default=None)
