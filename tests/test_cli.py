@@ -278,6 +278,120 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(warnings.count("totally-fake-model"), 1)
 
 
+class TierRecommendationTests(unittest.TestCase):
+    """Tests for recommend_tier() and the tier_recommended field in JSON."""
+
+    def _make_call(self, model, output_tokens, cost=0.01):
+        from datetime import datetime, timezone
+        return to.Call(
+            ts=datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc),
+            model=model,
+            input_tokens=100,
+            output_tokens=output_tokens,
+            cache_read_tokens=0,
+            cache_write_tokens=0,
+            cost=cost,
+            source="openclaw",
+            session_id="s1",
+        )
+
+    def test_opus_short_output_recommends_sonnet(self):
+        c = self._make_call("claude-opus-4-6", output_tokens=50)
+        self.assertEqual(to.recommend_tier(c), "claude-sonnet-4-6")
+
+    def test_opus_long_output_no_recommendation(self):
+        c = self._make_call("claude-opus-4-6", output_tokens=500)
+        self.assertIsNone(to.recommend_tier(c))
+
+    def test_haiku_no_recommendation(self):
+        # Haiku has no cheaper tier in TIER_DOWNSHIFT
+        c = self._make_call("claude-haiku-4-5", output_tokens=50)
+        self.assertIsNone(to.recommend_tier(c))
+
+    def test_sonnet_short_output_recommends_haiku(self):
+        c = self._make_call("claude-sonnet-4-6", output_tokens=100)
+        self.assertEqual(to.recommend_tier(c), "claude-haiku-4-5")
+
+    def test_tier_recommended_in_json_top_calls(self):
+        """analyze --format json top_calls must include tier_recommended."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            # Opus call with short output → should get a recommendation
+            records = [
+                {
+                    "type": "message",
+                    "id": "m1",
+                    "timestamp": "2026-04-01T12:00:00.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "usage": {
+                            "input": 100, "output": 50,
+                            "cacheRead": 0, "cacheWrite": 0,
+                            "cost": {"total": 0.005},
+                        },
+                    },
+                }
+            ]
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, records)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["analyze", p, "--source", "openclaw",
+                              "--format", "json"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            data = json.loads(buf.getvalue())
+            top = data["top_calls"]
+            self.assertEqual(len(top), 1)
+            self.assertIn("tier_recommended", top[0])
+            self.assertEqual(top[0]["tier_recommended"], "claude-sonnet-4-6")
+            self.assertIn("tier_recommended_saving", top[0])
+            self.assertGreater(top[0]["tier_recommended_saving"], 0)
+        finally:
+            tmp.cleanup()
+
+    def test_no_recommendation_fields_are_null(self):
+        """Calls that don't qualify get tier_recommended=None."""
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            # Opus call with LONG output → no recommendation
+            records = [
+                {
+                    "type": "message",
+                    "id": "m1",
+                    "timestamp": "2026-04-01T12:00:00.000Z",
+                    "message": {
+                        "role": "assistant",
+                        "model": "claude-opus-4-6",
+                        "usage": {
+                            "input": 100, "output": 1000,
+                            "cacheRead": 0, "cacheWrite": 0,
+                            "cost": {"total": 0.03},
+                        },
+                    },
+                }
+            ]
+            p = os.path.join(tmp.name, "s.jsonl")
+            _write_jsonl(p, records)
+            buf = io.StringIO()
+            sys.stdout = buf
+            try:
+                rc = to.main(["analyze", p, "--source", "openclaw",
+                              "--format", "json"])
+            finally:
+                sys.stdout = sys.__stdout__
+            self.assertEqual(rc, 0)
+            data = json.loads(buf.getvalue())
+            top = data["top_calls"]
+            self.assertIsNone(top[0]["tier_recommended"])
+            self.assertIsNone(top[0]["tier_recommended_saving"])
+        finally:
+            tmp.cleanup()
+
+
 class CacheOpportunityTests(unittest.TestCase):
     """Tests for the cache_opportunity score in aggregate()."""
 

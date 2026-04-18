@@ -37,7 +37,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.3.3"
+__version__ = "0.3.4"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -536,6 +536,43 @@ def load_calls(sources: List[Tuple[str, str]], since: Optional[datetime]) -> Lis
 # Reporting
 # ---------------------------------------------------------------------------
 
+def recommend_tier(call: "Call") -> Optional[str]:
+    """Return the recommended cheaper model for a call, or None.
+
+    A recommendation is made when:
+      - the call's model has a known cheaper alternative in TIER_DOWNSHIFT, AND
+      - the call produced ≤ DOWNSHIFT_OUTPUT_CEIL output tokens (heuristic:
+        short outputs are usually safe to run on a cheaper tier).
+
+    This is a heuristic. Phase 2 replaces it with a real classifier.
+    """
+    cheaper = TIER_DOWNSHIFT.get(call.model)
+    if cheaper and call.output_tokens <= DOWNSHIFT_OUTPUT_CEIL:
+        return cheaper
+    return None
+
+
+def annotate_call(call: "Call") -> Dict[str, Any]:
+    """Convert a Call to a dict and add the tier_recommended field."""
+    d = call.to_dict()
+    rec = recommend_tier(call)
+    d["tier_recommended"] = rec
+    if rec:
+        d["tier_recommended_saving"] = round(
+            call.cost - price_call(
+                rec,
+                input_tokens=call.input_tokens,
+                output_tokens=call.output_tokens,
+                cache_read_tokens=call.cache_read_tokens,
+                cache_write_tokens=call.cache_write_tokens,
+            ),
+            6,
+        )
+    else:
+        d["tier_recommended_saving"] = None
+    return d
+
+
 def aggregate(calls: List[Call], baseline: str, top_n: int = 10) -> Dict[str, Any]:
     """Compute every metric we report. Returns a JSON-friendly dict."""
     total_cost = sum(c.cost for c in calls)
@@ -662,7 +699,7 @@ def aggregate(calls: List[Call], baseline: str, top_n: int = 10) -> Dict[str, An
             {"source": k, "cost": round(v["cost"], 4), "calls": v["calls"]}
             for k, v in by_source.items()
         ],
-        "top_calls": [c.to_dict() for c in top_calls],
+        "top_calls": [annotate_call(c) for c in top_calls],
         "savings_estimate": {
             "baseline_model": baseline,
             "baseline_cost_if_all_on_baseline": round(baseline_cost, 4),
@@ -888,8 +925,8 @@ def analyze_waste(calls: List[Call]) -> Dict[str, Any]:
     cold_cache: List[Dict[str, Any]] = []
 
     for c in calls:
-        cheaper = TIER_DOWNSHIFT.get(c.model)
-        if cheaper and c.output_tokens <= DOWNSHIFT_OUTPUT_CEIL:
+        cheaper = recommend_tier(c)
+        if cheaper:
             cheaper_cost = price_call(
                 cheaper,
                 input_tokens=c.input_tokens,
@@ -902,7 +939,8 @@ def analyze_waste(calls: List[Call]) -> Dict[str, Any]:
                 overshoot.append({
                     "timestamp": c.ts.isoformat(),
                     "model": c.model,
-                    "cheaper_model": cheaper,
+                    "tier_recommended": cheaper,
+                    "cheaper_model": cheaper,   # kept for backward compat
                     "output_tokens": c.output_tokens,
                     "actual_cost": round(c.cost, 6),
                     "cheaper_cost": round(cheaper_cost, 6),
