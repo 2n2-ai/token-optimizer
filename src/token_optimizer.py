@@ -35,11 +35,12 @@ import json
 import os
 import sqlite3
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-__version__ = "0.3.6"
+__version__ = "0.3.7"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -1449,6 +1450,106 @@ def cmd_sources(args: argparse.Namespace) -> int:
     return 0
 
 
+def _call_fingerprint(c: "Call") -> Tuple:
+    """Stable identity key for a call — used by watch to detect new entries."""
+    return (c.ts.isoformat(), c.session_id, c.model, c.input_tokens, c.output_tokens)
+
+
+def _source_mtimes(sources: List[Tuple[str, str]]) -> Dict[str, float]:
+    """Return {path: mtime} for all file-based sources."""
+    result: Dict[str, float] = {}
+    for _kind, path in sources:
+        try:
+            result[path] = os.path.getmtime(path)
+        except OSError:
+            result[path] = 0.0
+    return result
+
+
+def cmd_watch(args: argparse.Namespace) -> int:
+    """Re-runs analysis whenever source files change; prints a delta each tick."""
+    interval = args.interval
+
+    sources = discover_sources(args.path, args.source)
+    if not sources:
+        print(
+            "no sources found. Try passing a path, or check that one of these exists:\n"
+            f"  {DEFAULT_OPENCLAW_GLOB}\n"
+            f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
+            f"  {DEFAULT_SQLITE_PATH}",
+            file=sys.stderr,
+        )
+        return 2
+
+    since = _parse_since(args)
+
+    # Initial load
+    all_calls = load_calls(sources, since)
+    all_calls.sort(key=lambda c: c.ts)
+    known_ids: Set[Tuple] = {_call_fingerprint(c) for c in all_calls}
+    prev_mtimes = _source_mtimes(sources)
+
+    total_cost = sum(c.cost for c in all_calls)
+    print(
+        f"token-optimizer watch  (interval {interval}s — Ctrl+C to stop)\n"
+        f"Sources : {len(sources)} file(s)\n"
+        f"Baseline: {len(all_calls):,} calls  ${total_cost:.4f} total\n"
+        f"Watching for new activity…\n"
+    )
+
+    try:
+        while True:
+            time.sleep(interval)
+
+            # Re-discover in case new session files appeared
+            new_sources = discover_sources(args.path, args.source)
+            new_mtimes = _source_mtimes(new_sources)
+
+            changed = (
+                set(new_mtimes.keys()) != set(prev_mtimes.keys())
+                or any(new_mtimes.get(p, 0) != prev_mtimes.get(p, 0) for p in new_mtimes)
+            )
+
+            if not changed:
+                continue
+
+            # Something changed — full reload, diff against known
+            fresh_calls = load_calls(new_sources, since)
+            fresh_calls.sort(key=lambda c: c.ts)
+            fresh_ids = {_call_fingerprint(c) for c in fresh_calls}
+
+            new_calls = [c for c in fresh_calls if _call_fingerprint(c) not in known_ids]
+
+            if new_calls:
+                now_str = datetime.now().strftime("%H:%M:%S")
+                delta_cost = sum(c.cost for c in new_calls)
+                # Group by model for the summary line
+                by_model: Dict[str, int] = defaultdict(int)
+                for c in new_calls:
+                    by_model[c.model] += 1
+                model_summary = "  ".join(
+                    f"{m} ×{n}" for m, n in sorted(by_model.items(), key=lambda x: -x[1])
+                )
+                print(f"[{now_str}] +{len(new_calls)} call(s)  +${delta_cost:.4f}  {model_summary}")
+                for c in new_calls:
+                    ts_local = c.ts.astimezone().strftime("%H:%M:%S")
+                    print(
+                        f"  {ts_local}  {c.model:<28s}"
+                        f"  {c.input_tokens:>6,} in / {c.output_tokens:>5,} out"
+                        f"  ${c.cost:.4f}"
+                    )
+                print()
+
+            known_ids = fresh_ids
+            prev_mtimes = new_mtimes
+            sources = new_sources
+
+    except KeyboardInterrupt:
+        print("\nwatch stopped.")
+
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="token-optimizer",
@@ -1513,6 +1614,20 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("path", nargs="?", default=None)
     s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"], default=None)
     s.set_defaults(func=cmd_sources)
+
+    wt = sub.add_parser("watch",
+                        help="Re-run analysis on log changes; print delta of new calls.")
+    wt.add_argument("path", nargs="?", default=None,
+                    help="Path to a file or directory. Default: scan known locations.")
+    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+                    default=None, help="Restrict scan to one source kind.")
+    wt.add_argument("--days", type=int, default=0,
+                    help="Only watch calls within the last N days. 0 = all time.")
+    wt.add_argument("--since", default=None, metavar="YYYY-MM-DD",
+                    help="Only watch calls on or after this date (UTC).")
+    wt.add_argument("--interval", type=int, default=5, metavar="SECONDS",
+                    help="Poll interval in seconds. Default: 5.")
+    wt.set_defaults(func=cmd_watch)
 
     return p
 

@@ -946,5 +946,55 @@ class MultiProviderPricingTests(unittest.TestCase):
         self.assertEqual(cost, 0.0)
 
 
+class WatchSubcommandTests(unittest.TestCase):
+    """Tests for the `watch` subcommand helpers (v0.3.7)."""
+
+    def _make_call(self, ts_str: str, model: str = "claude-sonnet-4-6",
+                   inp: int = 100, out: int = 50, cost: float = 0.002,
+                   session_id: str = "s1") -> to.Call:
+        from datetime import datetime, timezone
+        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+        return to.Call(
+            ts=ts, model=model, input_tokens=inp, output_tokens=out,
+            cache_read_tokens=0, cache_write_tokens=0,
+            cost=cost, source="openclaw", session_id=session_id,
+        )
+
+    def test_call_fingerprint_stable(self):
+        c = self._make_call("2026-04-19T10:00:00+00:00")
+        fp1 = to._call_fingerprint(c)
+        fp2 = to._call_fingerprint(c)
+        self.assertEqual(fp1, fp2)
+
+    def test_call_fingerprint_differs_by_ts(self):
+        c1 = self._make_call("2026-04-19T10:00:00+00:00")
+        c2 = self._make_call("2026-04-19T10:00:01+00:00")
+        self.assertNotEqual(to._call_fingerprint(c1), to._call_fingerprint(c2))
+
+    def test_source_mtimes_returns_zero_for_missing(self):
+        sources = [("openclaw", "/no/such/file.jsonl")]
+        mtimes = to._source_mtimes(sources)
+        self.assertEqual(mtimes["/no/such/file.jsonl"], 0.0)
+
+    def test_source_mtimes_returns_real_mtime(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".jsonl") as f:
+            sources = [("openclaw", f.name)]
+            mtimes = to._source_mtimes(sources)
+            self.assertGreater(mtimes[f.name], 0.0)
+
+    def test_watch_no_sources_returns_2(self):
+        rc = to.main(["watch", "/no/such/path/nonexistent.jsonl",
+                      "--source", "openclaw"])
+        self.assertEqual(rc, 2)
+
+    def test_watch_parser_registered(self):
+        # Ensure 'watch' subcommand is registered and --interval parses
+        p = to.build_parser()
+        args = p.parse_args(["watch", "--interval", "10"])
+        self.assertEqual(args.interval, 10)
+        self.assertEqual(args.func, to.cmd_watch)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -56,7 +56,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [x] `token-optimizer waste` subcommand: top 5 waste sources with examples. ✅ (2026-04-17, v0.3.2, 5 new tests, runs on real data: $845.91 recoverable)
 - [x] `token-optimizer digest --weekly` subcommand: emit Markdown/Slack/email. ✅ (2026-04-18, v0.3.5, markdown+slack+json formats, 6 new tests)
 - [ ] First paid feature: weekly digest auto-emailed to a user-supplied address.
-- [ ] `token-optimizer watch` (re-runs on log change, prints delta).
+- [x] `token-optimizer watch` (re-runs on log change, prints delta). ✅ (2026-04-19, v0.3.7, mtime-polling loop, delta output per new call, 6 new tests)
 - [x] `--since 2026-04-01` absolute date filter (currently only `--days N`). ✅ (2026-04-16, v0.3.1, overrides --days, 4 new tests)
 - [ ] Anthropic SDK direct parser (formalize the Claude Code shape).
 - [ ] Cursor parser.
