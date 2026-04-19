@@ -869,5 +869,82 @@ class CLIIntegrationTests(unittest.TestCase):
             tmp.cleanup()
 
 
+class MultiProviderPricingTests(unittest.TestCase):
+    """Tests for non-Anthropic provider pricing (v0.3.6)."""
+
+    def test_google_gemini_25_pro_bare(self):
+        # 1M input tokens on Gemini 2.5 Pro = $1.25
+        self.assertAlmostEqual(
+            to.price_call("gemini-2.5-pro", input_tokens=1_000_000),
+            1.25, places=4,
+        )
+
+    def test_google_gemini_25_pro_prefixed(self):
+        # Provider prefix should be stripped — same result as bare name
+        self.assertAlmostEqual(
+            to.price_call("google/gemini-2.5-pro", input_tokens=1_000_000),
+            1.25, places=4,
+        )
+
+    def test_google_gemini_20_flash_output(self):
+        # 1M output tokens on Gemini 2.0 Flash = $0.40
+        self.assertAlmostEqual(
+            to.price_call("google/gemini-2.0-flash", output_tokens=1_000_000),
+            0.40, places=4,
+        )
+
+    def test_openai_gpt4o_input(self):
+        # 1M input tokens on GPT-4o = $2.50
+        self.assertAlmostEqual(
+            to.price_call("gpt-4o", input_tokens=1_000_000),
+            2.50, places=4,
+        )
+
+    def test_openai_gpt4o_prefixed(self):
+        # "openai/" prefix stripped
+        self.assertAlmostEqual(
+            to.price_call("openai/gpt-4o", input_tokens=1_000_000),
+            2.50, places=4,
+        )
+
+    def test_openai_gpt4o_mini_output(self):
+        # 1M output tokens on GPT-4o-mini = $0.60
+        self.assertAlmostEqual(
+            to.price_call("gpt-4o-mini", output_tokens=1_000_000),
+            0.60, places=4,
+        )
+
+    def test_mistral_large_prefixed(self):
+        # "mistral/" prefix stripped; 1M output = $6.00
+        self.assertAlmostEqual(
+            to.price_call("mistral/mistral-large", output_tokens=1_000_000),
+            6.00, places=4,
+        )
+
+    def test_normalize_strips_google_prefix(self):
+        self.assertEqual(
+            to.normalize_model("google/gemini-2.5-pro"),
+            "gemini-2.5-pro",
+        )
+
+    def test_normalize_strips_openai_prefix_and_date(self):
+        self.assertEqual(
+            to.normalize_model("openai/gpt-4o-20250101"),
+            "gpt-4o",
+        )
+
+    def test_claude_opus_4_7_pricing(self):
+        # New Anthropic model — same tier as Opus 4.6 ($5/$25)
+        self.assertAlmostEqual(
+            to.price_call("claude-opus-4-7", input_tokens=1_000_000),
+            5.00, places=4,
+        )
+
+    def test_no_cache_write_keyerror_for_google(self):
+        # Google models have no cache_write key — should not raise, should cost $0 for write
+        cost = to.price_call("gemini-2.5-pro", cache_write_tokens=1_000_000)
+        self.assertEqual(cost, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

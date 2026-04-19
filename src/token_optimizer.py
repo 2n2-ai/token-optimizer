@@ -39,7 +39,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-__version__ = "0.3.5"
+__version__ = "0.3.6"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -50,8 +50,11 @@ __version__ = "0.3.5"
 # ---------------------------------------------------------------------------
 
 # Pricing per 1M tokens.
+# Non-Anthropic models omit cache_write keys (those providers don't expose cache writes).
+# price_call() uses .get(cw_key, 0) so missing keys are safe.
 PRICING: Dict[str, Dict[str, float]] = {
     # Anthropic — current generation
+    "claude-opus-4-7":   {"input":  5.00, "output": 25.00, "cache_read": 0.50, "cache_write_5m":  6.25, "cache_write_1h": 10.00},
     "claude-opus-4-6":   {"input":  5.00, "output": 25.00, "cache_read": 0.50, "cache_write_5m":  6.25, "cache_write_1h": 10.00},
     "claude-opus-4-5":   {"input":  5.00, "output": 25.00, "cache_read": 0.50, "cache_write_5m":  6.25, "cache_write_1h": 10.00},
     "claude-sonnet-4-6": {"input":  3.00, "output": 15.00, "cache_read": 0.30, "cache_write_5m":  3.75, "cache_write_1h":  6.00},
@@ -63,6 +66,38 @@ PRICING: Dict[str, Dict[str, float]] = {
     "claude-opus-4":     {"input": 15.00, "output": 75.00, "cache_read": 1.50, "cache_write_5m": 18.75, "cache_write_1h": 30.00},
     "claude-haiku-3-5":  {"input":  0.80, "output":  4.00, "cache_read": 0.08, "cache_write_5m":  1.00, "cache_write_1h":  1.60},
     "claude-haiku-3":    {"input":  0.25, "output":  1.25, "cache_read": 0.03, "cache_write_5m":  0.30, "cache_write_1h":  0.50},
+
+    # Google — Gemini (2026-04-19 pricing, ≤200k context tier)
+    # Provider prefix "google/" is stripped by normalize_model().
+    "gemini-2.5-pro":        {"input":  1.25, "output": 10.00, "cache_read": 0.31},
+    "gemini-2.5-flash":      {"input":  0.15, "output":  0.60, "cache_read": 0.04},
+    "gemini-2.0-flash":      {"input":  0.10, "output":  0.40, "cache_read": 0.025},
+    "gemini-2.0-flash-lite": {"input":  0.075,"output":  0.30, "cache_read": 0.019},
+    "gemini-1.5-pro":        {"input":  1.25, "output":  5.00, "cache_read": 0.31},
+    "gemini-1.5-flash":      {"input":  0.075,"output":  0.30, "cache_read": 0.019},
+    "gemini-1.5-flash-8b":   {"input":  0.0375,"output": 0.15, "cache_read": 0.01},
+
+    # OpenAI — GPT-4o family (2026-04-19 pricing)
+    # Provider prefix "openai/" is stripped by normalize_model().
+    "gpt-4o":        {"input":  2.50, "output": 10.00, "cache_read": 1.25},
+    "gpt-4o-mini":   {"input":  0.15, "output":  0.60, "cache_read": 0.075},
+    "gpt-4-turbo":   {"input": 10.00, "output": 30.00, "cache_read": 5.00},
+    "gpt-4":         {"input": 30.00, "output": 60.00, "cache_read": 0.00},
+    "gpt-3.5-turbo": {"input":  0.50, "output":  1.50, "cache_read": 0.00},
+    # OpenAI reasoning models
+    "o1":            {"input": 15.00, "output": 60.00, "cache_read": 7.50},
+    "o1-mini":       {"input":  3.00, "output": 12.00, "cache_read": 1.50},
+    "o3":            {"input": 10.00, "output": 40.00, "cache_read": 2.50},
+    "o3-mini":       {"input":  1.10, "output":  4.40, "cache_read": 0.55},
+    "o4-mini":       {"input":  1.10, "output":  4.40, "cache_read": 0.275},
+
+    # Mistral (2026-04-19 pricing)
+    # Provider prefix "mistral/" is stripped by normalize_model().
+    "mistral-large":  {"input": 2.00, "output": 6.00, "cache_read": 0.00},
+    "mistral-small":  {"input": 0.20, "output": 0.60, "cache_read": 0.00},
+    "mistral-medium": {"input": 2.70, "output": 8.10, "cache_read": 0.00},
+    "mistral-nemo":   {"input": 0.15, "output": 0.15, "cache_read": 0.00},
+    "codestral":      {"input": 0.20, "output": 0.60, "cache_read": 0.00},
 }
 
 # Sonnet 4.6 is our default "what would this have cost on the standard model"
@@ -155,12 +190,23 @@ class Call:
 # Pricing math
 # ---------------------------------------------------------------------------
 
+_PROVIDER_PREFIXES = ("google/", "openai/", "mistral/", "anthropic/", "meta/", "cohere/")
+
 def normalize_model(model: str) -> str:
-    """Strip Anthropic date suffixes (e.g. claude-opus-4-6-20251001)."""
+    """Strip provider prefixes and date suffixes from model IDs.
+
+    e.g. "google/gemini-2.5-pro-20250401" → "gemini-2.5-pro"
+         "claude-opus-4-6-20251001"        → "claude-opus-4-6"
+    """
     if not model:
         return "unknown"
     base = model.strip()
-    # Strip trailing -YYYYMMDD if present
+    # Strip provider prefix (e.g. "google/", "openai/")
+    for prefix in _PROVIDER_PREFIXES:
+        if base.startswith(prefix):
+            base = base[len(prefix):]
+            break
+    # Strip trailing -YYYYMMDD date suffix if present
     parts = base.rsplit("-", 1)
     if len(parts) == 2 and parts[1].isdigit() and len(parts[1]) == 8:
         base = parts[0]
@@ -190,10 +236,10 @@ def price_call(
         return 0.0
     cw_key = "cache_write_1h" if cache_write_kind == "1h" else "cache_write_5m"
     return (
-        (input_tokens or 0)        * p["input"]      / 1_000_000
-        + (output_tokens or 0)     * p["output"]     / 1_000_000
-        + (cache_read_tokens or 0) * p["cache_read"] / 1_000_000
-        + (cache_write_tokens or 0) * p[cw_key]      / 1_000_000
+        (input_tokens or 0)        * p.get("input", 0)       / 1_000_000
+        + (output_tokens or 0)     * p.get("output", 0)      / 1_000_000
+        + (cache_read_tokens or 0) * p.get("cache_read", 0)  / 1_000_000
+        + (cache_write_tokens or 0) * p.get(cw_key, 0)       / 1_000_000
     )
 
 

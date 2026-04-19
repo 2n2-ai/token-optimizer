@@ -62,8 +62,8 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [ ] Cursor parser.
 - [ ] OpenAI SDK parser.
 - [ ] ChatGPT data export parser.
-- [ ] Pricing for non-Anthropic providers (Google, OpenAI, Mistral) so
-      mixed stacks get real numbers instead of $0.
+- [x] Pricing for non-Anthropic providers (Google, OpenAI, Mistral) so
+      mixed stacks get real numbers instead of $0. ✅ (2026-04-19, v0.3.6, Google Gemini + OpenAI GPT/reasoning + Mistral, provider prefix stripping in normalize_model, 11 new tests)
 
 ## ⚫ Phase 3 — Active optimization (only if asked)
 
