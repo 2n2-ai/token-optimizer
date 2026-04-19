@@ -1,35 +1,35 @@
 # Token Optimizer — Itemized Receipt
 
-_Generated 2026-04-18 08:00 UTC_
+_Generated 2026-04-19 08:00 UTC_
 
 Your AI bill has no itemization. **This is the itemized receipt.**
 
 ## Summary
 
-- **Total spend:** $1,964.94
-- **API calls:** 18,188
-- **Input tokens:** 5,487,713
-- **Output tokens:** 5,127,468
-- **Cache reads:** 1,516,892,842
-- **Cache writes:** 107,041,741
+- **Total spend:** $1,984.09
+- **API calls:** 18,583
+- **Input tokens:** 6,038,934
+- **Output tokens:** 5,320,369
+- **Cache reads:** 1,551,398,259
+- **Cache writes:** 109,285,345
 - **Cache hit rate:** 93.1%
-- **Window:** 2026-04-01 16:37 → 2026-04-18 04:09
+- **Window:** 2026-04-01 16:37 → 2026-04-19 05:00
 
 ## Spend by source
 
 | Source | Calls | Cost |
 |---|---:|---:|
-| openclaw | 7,283 | $1,525.91 |
-| claude-code | 10,854 | $438.60 |
+| openclaw | 7,309 | $1,525.91 |
+| claude-code | 11,223 | $457.76 |
 | sqlite | 51 | $0.42 |
 
 ## Spend by model
 
 | Model | Calls | Input | Output | Cache R | Cache W | Cost | Cost/call | Share |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `claude-opus-4-6` | 9,272 | 69,093 | 2,180,212 | 1,052,752,837 | 70,872,609 | $1,830.35 | $0.20 | 93.2% |
-| `claude-sonnet-4-6` | 2,382 | 13,658 | 849,138 | 136,438,124 | 13,832,123 | $115.01 | $0.05 | 5.9% |
-| `claude-haiku-4-5` | 1,696 | 40,602 | 282,732 | 54,357,518 | 9,813,620 | $19.16 | $0.01 | 1.0% |
+| `claude-opus-4-6` | 9,272 | 69,093 | 2,180,212 | 1,052,752,837 | 70,872,609 | $1,830.35 | $0.20 | 92.3% |
+| `claude-sonnet-4-6` | 2,623 | 14,003 | 984,525 | 162,125,120 | 15,394,539 | $133.95 | $0.05 | 6.8% |
+| `claude-haiku-4-5` | 1,715 | 45,794 | 284,588 | 54,767,941 | 9,944,006 | $19.38 | $0.01 | 1.0% |
 | `free/gpt-oss-120b` | 43 | 616,679 | 0 | 0 | 0 | $0.37 | $0.0087 | 0.0% |
 | `google/gemini-3.1-flash-lite` | 5 | 71,693 | 0 | 0 | 0 | $0.05 | $0.0097 | 0.0% |
 
@@ -50,7 +50,8 @@ _(9 model(s) with $0 cost hidden: `delivery-mirror`, `google/gemini-2.5-pro`, `<
 | 2026-04-15 | 1,308 | $79.95 | █ |
 | 2026-04-16 | 3,537 | $178.82 | ███ |
 | 2026-04-17 | 3,741 | $66.54 | █ |
-| 2026-04-18 | 335 | $1.37 | █ |
+| 2026-04-18 | 715 | $20.53 | █ |
+| 2026-04-19 | 15 | $0.0000 | █ |
 
 ## Top 10 most expensive calls
 
@@ -69,16 +70,16 @@ _(9 model(s) with $0 cost hidden: `delivery-mirror`, `google/gemini-2.5-pro`, `<
 
 ## Savings teaser
 
-If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $949.85 vs your actual $1,964.94. You're spending **$1,015.09** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
+If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $973.16 vs your actual $1,984.09. You're spending **$1,010.93** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
 
-**7,757** of your calls produced ≤200 output tokens, which means they were probably safe to run on the next tier down. Routing them that way would have cost $1,050.26 instead of $1,964.94 — a savings of **$914.68**.
+**7,841** of your calls produced ≤200 output tokens, which means they were probably safe to run on the next tier down. Routing them that way would have cost $1,063.35 instead of $1,984.09 — a savings of **$920.74**.
 
 _This is a heuristic. Phase 2 ships a real classifier and per-call recommendations._
 
 ## Sources read
 
-- **openclaw**: 95 file(s)
-- **claude-code**: 150 file(s)
+- **openclaw**: 98 file(s)
+- **claude-code**: 154 file(s)
 - **sqlite**: 1 file(s)
 
 ---
