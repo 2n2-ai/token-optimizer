@@ -58,7 +58,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [ ] First paid feature: weekly digest auto-emailed to a user-supplied address.
 - [x] `token-optimizer watch` (re-runs on log change, prints delta). ✅ (2026-04-19, v0.3.7, mtime-polling loop, delta output per new call, 6 new tests)
 - [x] `--since 2026-04-01` absolute date filter (currently only `--days N`). ✅ (2026-04-16, v0.3.1, overrides --days, 4 new tests)
-- [ ] Anthropic SDK direct parser (formalize the Claude Code shape).
+- [x] Anthropic SDK direct parser (formalize the Claude Code shape). ✅ (2026-04-20, v0.3.8, parse_anthropic_sdk_log handles 3 shapes: raw Message, timestamped wrapper, flat; --source anthropic-sdk; auto-discovers ~/.anthropic/logs/*.jsonl; 7 new tests)
 - [ ] Cursor parser.
 - [ ] OpenAI SDK parser.
 - [ ] ChatGPT data export parser.

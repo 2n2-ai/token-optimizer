@@ -40,7 +40,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-__version__ = "0.3.7"
+__version__ = "0.3.8"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -485,6 +485,117 @@ def parse_sqlite_db(path: str) -> Iterable[Call]:
         conn.close()
 
 
+def _extract_sdk_usage(rec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Resolve the usage dict from an SDK log record in any common shape.
+
+    Supports three shapes produced by real SDK logging patterns:
+
+      1. Raw Message response (type=message, role=assistant):
+         {"type":"message","role":"assistant","model":"...","usage":{...}}
+
+      2. Timestamped wrapper with nested response:
+         {"timestamp":"...","response":{"type":"message","usage":{...}}}
+
+      3. Request+response pair:
+         {"timestamp":"...","request":{...},"response":{"type":"message","usage":{...}}}
+
+      4. Flat logged dict (simplified custom logging):
+         {"timestamp":"...","model":"...","usage":{"input_tokens":N,...}}
+    """
+    # Shape 2 & 3: look inside "response"
+    resp = rec.get("response")
+    if isinstance(resp, dict):
+        usage = resp.get("usage")
+        if isinstance(usage, dict) and "input_tokens" in usage:
+            return resp  # caller extracts model + usage from resp
+    # Shape 1: top-level message
+    if rec.get("type") == "message" and rec.get("role") == "assistant":
+        usage = rec.get("usage")
+        if isinstance(usage, dict) and "input_tokens" in usage:
+            return rec
+    # Shape 4: flat with usage at top level
+    usage = rec.get("usage")
+    if isinstance(usage, dict) and "input_tokens" in usage and rec.get("model"):
+        return rec
+    return None
+
+
+def parse_anthropic_sdk_log(path: str) -> Iterable[Call]:
+    """Yield Call objects from an Anthropic SDK JSONL log file.
+
+    Handles four common shapes (see _extract_sdk_usage). Usage keys follow
+    the SDK's snake_case schema: input_tokens, output_tokens,
+    cache_creation_input_tokens, cache_read_input_tokens.
+
+    If a record has no timestamp, the file's mtime is used as a fallback
+    so the call still appears in time-windowed reports.
+    """
+    session_id = os.path.basename(path).rsplit(".jsonl", 1)[0]
+    try:
+        file_mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    except OSError:
+        file_mtime = datetime.now(timezone.utc)
+    try:
+        fh = open(path, "r", errors="replace")
+    except OSError:
+        return
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+
+            src = _extract_sdk_usage(rec)
+            if src is None:
+                continue
+
+            usage = src.get("usage", {})
+            model = src.get("model") or rec.get("model") or "unknown"
+            input_t   = int(usage.get("input_tokens", 0) or 0)
+            output_t  = int(usage.get("output_tokens", 0) or 0)
+            cache_read  = int(usage.get("cache_read_input_tokens", 0) or 0)
+            cache_write = int(usage.get("cache_creation_input_tokens", 0) or 0)
+
+            # cache_creation sub-object for 5m vs 1h distinction (same as CC format)
+            cache_creation = usage.get("cache_creation") or {}
+            cw_kind = "5m"
+            if isinstance(cache_creation, dict):
+                if int(cache_creation.get("ephemeral_1h_input_tokens", 0) or 0) > \
+                        int(cache_creation.get("ephemeral_5m_input_tokens", 0) or 0):
+                    cw_kind = "1h"
+
+            # Timestamp: prefer record-level, fall back to file mtime
+            ts = parse_ts(rec.get("timestamp") or src.get("created_at"))
+            if ts is None:
+                ts = file_mtime
+
+            cost = price_call(
+                model,
+                input_tokens=input_t,
+                output_tokens=output_t,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                cache_write_kind=cw_kind,
+            )
+            yield Call(
+                ts=ts,
+                model=normalize_model(model),
+                input_tokens=input_t,
+                output_tokens=output_t,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                cost=cost,
+                source="anthropic-sdk",
+                session_id=session_id,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Source discovery
 # ---------------------------------------------------------------------------
@@ -492,6 +603,7 @@ def parse_sqlite_db(path: str) -> Iterable[Call]:
 DEFAULT_OPENCLAW_GLOB = "~/.openclaw/agents/*/sessions/*.jsonl"
 DEFAULT_CLAUDE_CODE_GLOB = "~/.claude/projects/**/*.jsonl"
 DEFAULT_SQLITE_PATH = "~/.openclaw/token-optimizer/usage.db"
+DEFAULT_ANTHROPIC_SDK_GLOB = "~/.anthropic/logs/*.jsonl"
 
 
 def _is_session_jsonl(name: str) -> bool:
@@ -505,41 +617,39 @@ def _is_session_jsonl(name: str) -> bool:
 def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[str, str]]:
     """Return a list of (kind, file_or_dir) pairs to read.
 
-    Kind is one of: openclaw, claude-code, sqlite.
+    Kind is one of: openclaw, claude-code, sqlite, anthropic-sdk.
     """
     found: List[Tuple[str, str]] = []
 
-    def add_openclaw_glob(pattern: str):
-        for p in sorted(glob.glob(os.path.expanduser(pattern))):
-            if _is_session_jsonl(os.path.basename(p)):
-                found.append(("openclaw", p))
-
-    def add_claude_code_glob(pattern: str):
+    def add_glob(kind: str, pattern: str):
         for p in sorted(glob.glob(os.path.expanduser(pattern), recursive=True)):
             if _is_session_jsonl(os.path.basename(p)):
-                found.append(("claude-code", p))
+                found.append((kind, p))
 
     if path:
         path = os.path.expanduser(path)
         if os.path.isfile(path):
             if path.endswith(".db"):
                 found.append(("sqlite", path))
-            elif "openclaw/agents" in path or (source == "openclaw"):
+            elif source == "anthropic-sdk" or ".anthropic" in path:
+                found.append(("anthropic-sdk", path))
+            elif "openclaw/agents" in path or source == "openclaw":
                 found.append(("openclaw", path))
-            elif ".claude/projects" in path or (source == "claude-code"):
+            elif ".claude/projects" in path or source == "claude-code":
                 found.append(("claude-code", path))
             else:
-                # Try OpenClaw schema first, then Claude Code
+                # Ambiguous: try openclaw schema (parser is tolerant)
                 found.append(("openclaw", path))
         elif os.path.isdir(path):
-            # Walk dir for jsonl + db files
             for root, _dirs, files in os.walk(path):
                 for fn in files:
                     full = os.path.join(root, fn)
                     if fn.endswith(".db"):
                         found.append(("sqlite", full))
                     elif _is_session_jsonl(fn):
-                        if "openclaw" in root:
+                        if ".anthropic" in root or source == "anthropic-sdk":
+                            found.append(("anthropic-sdk", full))
+                        elif "openclaw" in root:
                             found.append(("openclaw", full))
                         elif ".claude" in root:
                             found.append(("claude-code", full))
@@ -549,13 +659,15 @@ def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[s
 
     # No path → scan defaults filtered by --source
     if source in (None, "openclaw"):
-        add_openclaw_glob(DEFAULT_OPENCLAW_GLOB)
+        add_glob("openclaw", DEFAULT_OPENCLAW_GLOB)
     if source in (None, "claude-code"):
-        add_claude_code_glob(DEFAULT_CLAUDE_CODE_GLOB)
+        add_glob("claude-code", DEFAULT_CLAUDE_CODE_GLOB)
     if source in (None, "sqlite"):
         sqlite_path = os.path.expanduser(DEFAULT_SQLITE_PATH)
         if os.path.exists(sqlite_path):
             found.append(("sqlite", sqlite_path))
+    if source in (None, "anthropic-sdk"):
+        add_glob("anthropic-sdk", DEFAULT_ANTHROPIC_SDK_GLOB)
 
     return found
 
@@ -571,6 +683,8 @@ def load_calls(sources: List[Tuple[str, str]], since: Optional[datetime]) -> Lis
                 it = parse_claude_code_session(path)
             elif kind == "sqlite":
                 it = parse_sqlite_db(path)
+            elif kind == "anthropic-sdk":
+                it = parse_anthropic_sdk_log(path)
             else:
                 continue
             for call in it:
@@ -1280,7 +1394,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             "no sources found. Try passing a path, or check that one of these exists:\n"
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
-            f"  {DEFAULT_SQLITE_PATH}",
+            f"  {DEFAULT_SQLITE_PATH}\n"
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1339,7 +1454,8 @@ def cmd_waste(args: argparse.Namespace) -> int:
             "no sources found. Try passing a path, or check that one of these exists:\n"
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
-            f"  {DEFAULT_SQLITE_PATH}",
+            f"  {DEFAULT_SQLITE_PATH}\n"
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1389,7 +1505,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
             "no sources found. Try passing a path, or check that one of these exists:\n"
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
-            f"  {DEFAULT_SQLITE_PATH}",
+            f"  {DEFAULT_SQLITE_PATH}\n"
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1476,7 +1593,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
             "no sources found. Try passing a path, or check that one of these exists:\n"
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
-            f"  {DEFAULT_SQLITE_PATH}",
+            f"  {DEFAULT_SQLITE_PATH}\n"
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1561,7 +1679,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("analyze", help="Analyze logs and print a report.")
     a.add_argument("path", nargs="?", default=None,
                    help="Path to a file or directory. Default: scan known locations.")
-    a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+    a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
                    default=None, help="Restrict scan to one source kind.")
     a.add_argument("--format", choices=["markdown", "json"], default="markdown",
                    help="Output format. Default: markdown.")
@@ -1581,7 +1699,7 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("waste", help="Show top waste patterns: tier overshoot and cold cache writes.")
     w.add_argument("path", nargs="?", default=None,
                    help="Path to a file or directory. Default: scan known locations.")
-    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
                    default=None, help="Restrict scan to one source kind.")
     w.add_argument("--days", type=int, default=0,
                    help="Only include calls within the last N days. 0 = all time.")
@@ -1597,7 +1715,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Compact periodic summary — suitable for weekly email or Slack.")
     dg.add_argument("path", nargs="?", default=None,
                     help="Path to a file or directory. Default: scan known locations.")
-    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
                     default=None, help="Restrict scan to one source kind.")
     dg.add_argument("--days", type=int, default=7,
                     help="Number of days to cover. Default: 7 (weekly).")
@@ -1612,14 +1730,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("sources", help="Print which log sources would be read.")
     s.add_argument("path", nargs="?", default=None)
-    s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"], default=None)
+    s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"], default=None)
     s.set_defaults(func=cmd_sources)
 
     wt = sub.add_parser("watch",
                         help="Re-run analysis on log changes; print delta of new calls.")
     wt.add_argument("path", nargs="?", default=None,
                     help="Path to a file or directory. Default: scan known locations.")
-    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite"],
+    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
                     default=None, help="Restrict scan to one source kind.")
     wt.add_argument("--days", type=int, default=0,
                     help="Only watch calls within the last N days. 0 = all time.")

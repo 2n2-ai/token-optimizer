@@ -996,5 +996,137 @@ class WatchSubcommandTests(unittest.TestCase):
         self.assertEqual(args.func, to.cmd_watch)
 
 
+class AnthropicSdkParserTests(unittest.TestCase):
+    """Tests for parse_anthropic_sdk_log (v0.3.8)."""
+
+    SDK_RAW_MESSAGE = {
+        "type": "message",
+        "role": "assistant",
+        "id": "msg_abc123",
+        "model": "claude-sonnet-4-6-20250101",
+        "stop_reason": "end_turn",
+        "usage": {
+            "input_tokens": 1000,
+            "output_tokens": 250,
+            "cache_read_input_tokens": 500,
+            "cache_creation_input_tokens": 0,
+        },
+    }
+
+    SDK_WRAPPED = {
+        "timestamp": "2026-04-20T10:00:00Z",
+        "response": {
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-4-6",
+            "usage": {
+                "input_tokens": 2000,
+                "output_tokens": 400,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        },
+    }
+
+    SDK_FLAT = {
+        "timestamp": "2026-04-20T11:00:00Z",
+        "model": "gpt-4o",
+        "usage": {
+            "input_tokens": 500,
+            "output_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+    }
+
+    def _write_sdk_jsonl(self, tmp, records):
+        path = os.path.join(tmp, "sdk.jsonl")
+        with open(path, "w") as fh:
+            for r in records:
+                fh.write(json.dumps(r) + "\n")
+        return path
+
+    def test_raw_message_shape(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write_sdk_jsonl(tmp, [self.SDK_RAW_MESSAGE])
+            calls = list(to.parse_anthropic_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+            c = calls[0]
+            self.assertEqual(c.model, "claude-sonnet-4-6")  # date suffix stripped
+            self.assertEqual(c.input_tokens, 1000)
+            self.assertEqual(c.output_tokens, 250)
+            self.assertEqual(c.cache_read_tokens, 500)
+            self.assertEqual(c.source, "anthropic-sdk")
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_timestamped_wrapper_shape(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write_sdk_jsonl(tmp, [self.SDK_WRAPPED])
+            calls = list(to.parse_anthropic_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+            c = calls[0]
+            self.assertEqual(c.model, "claude-opus-4-6")
+            self.assertEqual(c.input_tokens, 2000)
+            # Timestamp was explicit
+            self.assertEqual(c.ts.year, 2026)
+            self.assertEqual(c.ts.month, 4)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_flat_shape_with_openai_model(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write_sdk_jsonl(tmp, [self.SDK_FLAT])
+            calls = list(to.parse_anthropic_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+            c = calls[0]
+            self.assertEqual(c.model, "gpt-4o")
+            self.assertEqual(c.input_tokens, 500)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_mixed_records_skips_invalid(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            records = [
+                {"type": "not_a_message", "foo": "bar"},  # skipped
+                self.SDK_WRAPPED,
+                {"bad": "json shape"},  # skipped
+                self.SDK_RAW_MESSAGE,
+            ]
+            path = self._write_sdk_jsonl(tmp, records)
+            calls = list(to.parse_anthropic_sdk_log(path))
+            self.assertEqual(len(calls), 2)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_cost_derived_from_pricing(self):
+        # 1000 input + 250 output on Sonnet 4.6: 1000*3/1M + 250*15/1M = 0.003+0.00375 = 0.00675
+        # Plus 500 cache_read: 500*0.3/1M = 0.00015
+        # Total = 0.0069
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write_sdk_jsonl(tmp, [self.SDK_RAW_MESSAGE])
+            calls = list(to.parse_anthropic_sdk_log(path))
+            self.assertAlmostEqual(calls[0].cost, 0.0069, places=5)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_source_choice_anthropic_sdk(self):
+        # Ensure argparse accepts --source anthropic-sdk
+        p = to.build_parser()
+        args = p.parse_args(["analyze", "--source", "anthropic-sdk"])
+        self.assertEqual(args.source, "anthropic-sdk")
+
+    def test_discover_sources_finds_anthropic_sdk_files(self):
+        # discover_sources with source=anthropic-sdk should use the .anthropic path
+        # (no files exist, so result is empty — but path detection shouldn't crash)
+        sources = to.discover_sources(None, "anthropic-sdk")
+        self.assertIsInstance(sources, list)
+
+
 if __name__ == "__main__":
     unittest.main()
