@@ -40,7 +40,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-__version__ = "0.3.8"
+__version__ = "0.3.9"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -596,6 +596,112 @@ def parse_anthropic_sdk_log(path: str) -> Iterable[Call]:
             )
 
 
+def parse_openai_sdk_log(path: str) -> Iterable[Call]:
+    """Yield Call objects from an OpenAI SDK JSONL log file.
+
+    Supports three common shapes:
+
+      1. Raw ChatCompletion response:
+         {"object":"chat.completion","model":"gpt-4o","created":1714000000,
+          "usage":{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150,
+                   "prompt_tokens_details":{"cached_tokens":20}}}
+
+      2. Timestamped wrapper (common custom logging pattern):
+         {"timestamp":"2026-04-20T10:00:00Z",
+          "response":{"object":"chat.completion",...}}
+
+      3. Flat dict with top-level usage (simplified logging):
+         {"timestamp":"...","model":"gpt-4o",
+          "usage":{"prompt_tokens":N,"completion_tokens":N}}
+
+    Token field mapping:
+      prompt_tokens            → input_tokens
+      completion_tokens        → output_tokens
+      prompt_tokens_details.cached_tokens → cache_read_tokens
+    """
+    session_id = os.path.basename(path).rsplit(".jsonl", 1)[0]
+    try:
+        file_mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    except OSError:
+        file_mtime = datetime.now(timezone.utc)
+    try:
+        fh = open(path, "r", errors="replace")
+    except OSError:
+        return
+    with fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+
+            # Resolve the object that holds model + usage
+            src = rec
+            ts_raw = rec.get("timestamp")
+
+            resp = rec.get("response")
+            if isinstance(resp, dict) and resp.get("object") in (
+                "chat.completion", "text_completion"
+            ):
+                src = resp
+            elif rec.get("object") not in ("chat.completion", "text_completion", None):
+                continue  # not an OpenAI completion record
+
+            usage = src.get("usage")
+            if not isinstance(usage, dict):
+                usage = rec.get("usage")
+            if not isinstance(usage, dict):
+                continue
+            if "prompt_tokens" not in usage and "completion_tokens" not in usage:
+                continue
+
+            model = src.get("model") or rec.get("model") or "unknown"
+            input_t  = int(usage.get("prompt_tokens", 0) or 0)
+            output_t = int(usage.get("completion_tokens", 0) or 0)
+
+            # OpenAI prompt_tokens_details carries cached_tokens (cache hits)
+            details = usage.get("prompt_tokens_details") or {}
+            cache_read = int(details.get("cached_tokens", 0) or 0)
+
+            # OpenAI doesn't expose cache writes — cost only on read side
+            cache_write = 0
+
+            # Timestamp: prefer record-level field, then "created" (Unix epoch), then mtime
+            ts = None
+            if ts_raw:
+                ts = parse_ts(ts_raw)
+            if ts is None:
+                created = src.get("created") or rec.get("created")
+                if isinstance(created, (int, float)) and created > 0:
+                    ts = datetime.fromtimestamp(created, tz=timezone.utc)
+            if ts is None:
+                ts = file_mtime
+
+            cost = price_call(
+                model,
+                input_tokens=input_t,
+                output_tokens=output_t,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+            )
+            yield Call(
+                ts=ts,
+                model=normalize_model(model),
+                input_tokens=input_t,
+                output_tokens=output_t,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
+                cost=cost,
+                source="openai-sdk",
+                session_id=session_id,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Source discovery
 # ---------------------------------------------------------------------------
@@ -604,6 +710,7 @@ DEFAULT_OPENCLAW_GLOB = "~/.openclaw/agents/*/sessions/*.jsonl"
 DEFAULT_CLAUDE_CODE_GLOB = "~/.claude/projects/**/*.jsonl"
 DEFAULT_SQLITE_PATH = "~/.openclaw/token-optimizer/usage.db"
 DEFAULT_ANTHROPIC_SDK_GLOB = "~/.anthropic/logs/*.jsonl"
+DEFAULT_OPENAI_SDK_GLOB = "~/.openai/logs/*.jsonl"
 
 
 def _is_session_jsonl(name: str) -> bool:
@@ -617,7 +724,7 @@ def _is_session_jsonl(name: str) -> bool:
 def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[str, str]]:
     """Return a list of (kind, file_or_dir) pairs to read.
 
-    Kind is one of: openclaw, claude-code, sqlite, anthropic-sdk.
+    Kind is one of: openclaw, claude-code, sqlite, anthropic-sdk, openai-sdk.
     """
     found: List[Tuple[str, str]] = []
 
@@ -633,6 +740,8 @@ def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[s
                 found.append(("sqlite", path))
             elif source == "anthropic-sdk" or ".anthropic" in path:
                 found.append(("anthropic-sdk", path))
+            elif source == "openai-sdk" or ".openai" in path:
+                found.append(("openai-sdk", path))
             elif "openclaw/agents" in path or source == "openclaw":
                 found.append(("openclaw", path))
             elif ".claude/projects" in path or source == "claude-code":
@@ -649,6 +758,8 @@ def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[s
                     elif _is_session_jsonl(fn):
                         if ".anthropic" in root or source == "anthropic-sdk":
                             found.append(("anthropic-sdk", full))
+                        elif ".openai" in root or source == "openai-sdk":
+                            found.append(("openai-sdk", full))
                         elif "openclaw" in root:
                             found.append(("openclaw", full))
                         elif ".claude" in root:
@@ -668,6 +779,8 @@ def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[s
             found.append(("sqlite", sqlite_path))
     if source in (None, "anthropic-sdk"):
         add_glob("anthropic-sdk", DEFAULT_ANTHROPIC_SDK_GLOB)
+    if source in (None, "openai-sdk"):
+        add_glob("openai-sdk", DEFAULT_OPENAI_SDK_GLOB)
 
     return found
 
@@ -685,6 +798,8 @@ def load_calls(sources: List[Tuple[str, str]], since: Optional[datetime]) -> Lis
                 it = parse_sqlite_db(path)
             elif kind == "anthropic-sdk":
                 it = parse_anthropic_sdk_log(path)
+            elif kind == "openai-sdk":
+                it = parse_openai_sdk_log(path)
             else:
                 continue
             for call in it:
@@ -1395,7 +1510,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
-            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
+            f"  {DEFAULT_OPENAI_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1455,7 +1571,8 @@ def cmd_waste(args: argparse.Namespace) -> int:
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
-            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
+            f"  {DEFAULT_OPENAI_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1506,7 +1623,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
-            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
+            f"  {DEFAULT_OPENAI_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1594,7 +1712,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
             f"  {DEFAULT_OPENCLAW_GLOB}\n"
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
-            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}",
+            f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
+            f"  {DEFAULT_OPENAI_SDK_GLOB}",
             file=sys.stderr,
         )
         return 2
@@ -1679,7 +1798,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("analyze", help="Analyze logs and print a report.")
     a.add_argument("path", nargs="?", default=None,
                    help="Path to a file or directory. Default: scan known locations.")
-    a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
+    a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
                    default=None, help="Restrict scan to one source kind.")
     a.add_argument("--format", choices=["markdown", "json"], default="markdown",
                    help="Output format. Default: markdown.")
@@ -1699,7 +1818,7 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("waste", help="Show top waste patterns: tier overshoot and cold cache writes.")
     w.add_argument("path", nargs="?", default=None,
                    help="Path to a file or directory. Default: scan known locations.")
-    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
+    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
                    default=None, help="Restrict scan to one source kind.")
     w.add_argument("--days", type=int, default=0,
                    help="Only include calls within the last N days. 0 = all time.")
@@ -1715,7 +1834,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Compact periodic summary — suitable for weekly email or Slack.")
     dg.add_argument("path", nargs="?", default=None,
                     help="Path to a file or directory. Default: scan known locations.")
-    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
+    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
                     default=None, help="Restrict scan to one source kind.")
     dg.add_argument("--days", type=int, default=7,
                     help="Number of days to cover. Default: 7 (weekly).")
@@ -1730,14 +1849,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("sources", help="Print which log sources would be read.")
     s.add_argument("path", nargs="?", default=None)
-    s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"], default=None)
+    s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"], default=None)
     s.set_defaults(func=cmd_sources)
 
     wt = sub.add_parser("watch",
                         help="Re-run analysis on log changes; print delta of new calls.")
     wt.add_argument("path", nargs="?", default=None,
                     help="Path to a file or directory. Default: scan known locations.")
-    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk"],
+    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
                     default=None, help="Restrict scan to one source kind.")
     wt.add_argument("--days", type=int, default=0,
                     help="Only watch calls within the last N days. 0 = all time.")

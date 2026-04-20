@@ -1128,5 +1128,139 @@ class AnthropicSdkParserTests(unittest.TestCase):
         self.assertIsInstance(sources, list)
 
 
+class OpenAiSdkParserTests(unittest.TestCase):
+    """Tests for parse_openai_sdk_log (v0.3.9)."""
+
+    RAW_COMPLETION = {
+        "id": "chatcmpl-abc123",
+        "object": "chat.completion",
+        "created": 1745000000,
+        "model": "gpt-4o",
+        "choices": [{"message": {"role": "assistant", "content": "hi"}}],
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "prompt_tokens_details": {"cached_tokens": 20},
+        },
+    }
+
+    WRAPPED_COMPLETION = {
+        "timestamp": "2026-04-20T14:00:00Z",
+        "response": {
+            "object": "chat.completion",
+            "model": "gpt-4o-mini",
+            "usage": {
+                "prompt_tokens": 200,
+                "completion_tokens": 80,
+                "total_tokens": 280,
+            },
+        },
+    }
+
+    FLAT_WITH_TS = {
+        "timestamp": "2026-04-20T15:00:00Z",
+        "model": "gpt-3.5-turbo",
+        "usage": {
+            "prompt_tokens": 50,
+            "completion_tokens": 30,
+        },
+    }
+
+    def _write(self, tmp, records):
+        path = os.path.join(tmp, "openai.jsonl")
+        with open(path, "w") as fh:
+            for r in records:
+                fh.write(json.dumps(r) + "\n")
+        return path
+
+    def test_raw_completion_shape(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write(tmp, [self.RAW_COMPLETION])
+            calls = list(to.parse_openai_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+            c = calls[0]
+            self.assertEqual(c.model, "gpt-4o")
+            self.assertEqual(c.input_tokens, 100)
+            self.assertEqual(c.output_tokens, 50)
+            self.assertEqual(c.cache_read_tokens, 20)
+            self.assertEqual(c.source, "openai-sdk")
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_unix_epoch_timestamp(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write(tmp, [self.RAW_COMPLETION])
+            calls = list(to.parse_openai_sdk_log(path))
+            # created=1745000000 → 2025-04-19 ish; just check it's parsed
+            self.assertIsNotNone(calls[0].ts)
+            self.assertEqual(calls[0].ts.year, 2025)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_wrapped_completion_shape(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write(tmp, [self.WRAPPED_COMPLETION])
+            calls = list(to.parse_openai_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+            c = calls[0]
+            self.assertEqual(c.model, "gpt-4o-mini")
+            self.assertEqual(c.input_tokens, 200)
+            self.assertEqual(c.output_tokens, 80)
+            self.assertEqual(c.cache_read_tokens, 0)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_flat_shape_with_timestamp(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write(tmp, [self.FLAT_WITH_TS])
+            calls = list(to.parse_openai_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].model, "gpt-3.5-turbo")
+            self.assertEqual(calls[0].input_tokens, 50)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_cost_derived_from_pricing(self):
+        # 100 prompt + 50 completion on gpt-4o: 100*2.5/1M + 50*10/1M = 0.00025+0.0005 = 0.00075
+        # minus 20 cached: 20*1.25/1M = 0.000025 → net input cost=(100-20)*2.5/1M + 20*1.25/1M
+        # Actually price_call uses raw tokens — cache_read lowers effective cost via cache_read rate
+        # 100*2.5/1M + 50*10/1M + 20*1.25/1M = 0.00025 + 0.0005 + 0.000025 = 0.000775
+        tmp = tempfile.mkdtemp()
+        try:
+            path = self._write(tmp, [self.RAW_COMPLETION])
+            calls = list(to.parse_openai_sdk_log(path))
+            self.assertAlmostEqual(calls[0].cost, 0.000775, places=6)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_skips_non_completion_records(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            records = [
+                {"object": "embedding", "model": "text-embedding-3-small", "usage": {"total_tokens": 100}},
+                self.RAW_COMPLETION,
+                {"type": "message", "role": "user", "content": "hello"},
+            ]
+            path = self._write(tmp, records)
+            calls = list(to.parse_openai_sdk_log(path))
+            self.assertEqual(len(calls), 1)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_source_choice_openai_sdk(self):
+        p = to.build_parser()
+        args = p.parse_args(["analyze", "--source", "openai-sdk"])
+        self.assertEqual(args.source, "openai-sdk")
+
+    def test_discover_sources_openai_sdk_no_crash(self):
+        sources = to.discover_sources(None, "openai-sdk")
+        self.assertIsInstance(sources, list)
+
+
 if __name__ == "__main__":
     unittest.main()

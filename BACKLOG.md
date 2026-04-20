@@ -60,7 +60,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [x] `--since 2026-04-01` absolute date filter (currently only `--days N`). ✅ (2026-04-16, v0.3.1, overrides --days, 4 new tests)
 - [x] Anthropic SDK direct parser (formalize the Claude Code shape). ✅ (2026-04-20, v0.3.8, parse_anthropic_sdk_log handles 3 shapes: raw Message, timestamped wrapper, flat; --source anthropic-sdk; auto-discovers ~/.anthropic/logs/*.jsonl; 7 new tests)
 - [ ] Cursor parser.
-- [ ] OpenAI SDK parser.
+- [x] OpenAI SDK parser. ✅ (2026-04-20, v0.3.9, parse_openai_sdk_log handles raw ChatCompletion, timestamped wrapper, flat dict; prompt_tokens_details.cached_tokens → cache_read; unix epoch timestamp; --source openai-sdk; 8 new tests)
 - [ ] ChatGPT data export parser.
 - [x] Pricing for non-Anthropic providers (Google, OpenAI, Mistral) so
       mixed stacks get real numbers instead of $0. ✅ (2026-04-19, v0.3.6, Google Gemini + OpenAI GPT/reasoning + Mistral, provider prefix stripping in normalize_model, 11 new tests)
