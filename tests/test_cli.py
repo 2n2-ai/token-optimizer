@@ -1399,5 +1399,117 @@ class ChatGptExportParserTests(unittest.TestCase):
             import shutil; shutil.rmtree(tmp)
 
 
+class CsvExportTests(unittest.TestCase):
+    """Tests for --format csv on the analyze subcommand (v0.4.1)."""
+
+    def _make_fixture(self, tmp):
+        p = os.path.join(tmp, "s.jsonl")
+        _write_jsonl(p, OPENCLAW_SAMPLE)
+        return p
+
+    def test_csv_header_columns(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            calls = list(to.parse_openclaw_session(p))
+            out = to.render_csv(calls)
+            header = out.split("\n")[0]
+            for col in ("timestamp", "model", "source", "session_id",
+                        "input_tokens", "output_tokens",
+                        "cache_read_tokens", "cache_write_tokens", "cost"):
+                self.assertIn(col, header)
+        finally:
+            tmp.cleanup()
+
+    def test_csv_row_count_matches_calls(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            calls = list(to.parse_openclaw_session(p))
+            out = to.render_csv(calls)
+            lines = [l for l in out.strip().split("\n") if l]
+            # 1 header + N data rows
+            self.assertEqual(len(lines), len(calls) + 1)
+        finally:
+            tmp.cleanup()
+
+    def test_csv_cost_precision(self):
+        # cost must have enough decimal places to avoid rounding micro-costs to 0
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            calls = list(to.parse_openclaw_session(p))
+            out = to.render_csv(calls)
+            import csv as csv_mod, io as io_mod
+            reader = csv_mod.DictReader(io_mod.StringIO(out))
+            for row in reader:
+                cost_str = row["cost"]
+                # Should have at least 6 decimal places
+                self.assertIn(".", cost_str)
+                self.assertGreaterEqual(len(cost_str.split(".")[1]), 6)
+        finally:
+            tmp.cleanup()
+
+    def test_csv_sorted_by_timestamp(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            calls = list(to.parse_openclaw_session(p))
+            out = to.render_csv(calls)
+            import csv as csv_mod, io as io_mod
+            rows = list(csv_mod.DictReader(io_mod.StringIO(out)))
+            timestamps = [r["timestamp"] for r in rows]
+            self.assertEqual(timestamps, sorted(timestamps))
+        finally:
+            tmp.cleanup()
+
+    def test_analyze_csv_format_flag(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            buf = io.StringIO()
+            real_stdout = sys.stdout
+            sys.stdout = buf
+            try:
+                rc = to.main([
+                    "analyze", p,
+                    "--source", "openclaw",
+                    "--format", "csv",
+                ])
+            finally:
+                sys.stdout = real_stdout
+            self.assertEqual(rc, 0)
+            output = buf.getvalue()
+            self.assertIn("timestamp", output)
+            self.assertIn("claude-opus-4-6", output)
+        finally:
+            tmp.cleanup()
+
+    def test_analyze_csv_writes_to_file(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            out_path = os.path.join(tmp.name, "report.csv")
+            rc = to.main([
+                "analyze", p,
+                "--source", "openclaw",
+                "--format", "csv",
+                "-o", out_path,
+            ])
+            self.assertEqual(rc, 0)
+            with open(out_path) as fh:
+                body = fh.read()
+            self.assertIn("timestamp,model", body)
+            self.assertIn("claude-opus-4-6", body)
+        finally:
+            tmp.cleanup()
+
+    def test_render_csv_exported(self):
+        # render_csv and _CSV_FIELDS must be importable at module level
+        self.assertTrue(callable(to.render_csv))
+        self.assertIn("timestamp", to._CSV_FIELDS)
+        self.assertIn("cost", to._CSV_FIELDS)
+
+
 if __name__ == "__main__":
     unittest.main()

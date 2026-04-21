@@ -30,7 +30,9 @@ Read-only. No network. No daemon. No API keys. Run it and walk away.
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
+import io
 import json
 import os
 import sqlite3
@@ -41,7 +43,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -1684,6 +1686,41 @@ def render_json(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
     return json.dumps(payload, indent=2, default=str)
 
 
+_CSV_FIELDS = [
+    "timestamp", "model", "source", "session_id",
+    "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+    "cost",
+]
+
+
+def render_csv(calls: List["Call"]) -> str:
+    """Return all calls as a CSV string, one row per call, sorted by timestamp.
+
+    Columns: timestamp, model, source, session_id,
+             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost
+
+    Cost is formatted to 8 decimal places so micro-cost calls aren't rounded to $0.
+    All calls are included (not just the top-N), giving users the full dataset
+    for downstream analysis in Excel, Google Sheets, pandas, etc.
+    """
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=_CSV_FIELDS, lineterminator="\n")
+    writer.writeheader()
+    for c in sorted(calls, key=lambda x: x.ts):
+        writer.writerow({
+            "timestamp":          c.ts.isoformat(),
+            "model":              c.model,
+            "source":             c.source,
+            "session_id":         c.session_id or "",
+            "input_tokens":       c.input_tokens,
+            "output_tokens":      c.output_tokens,
+            "cache_read_tokens":  c.cache_read_tokens,
+            "cache_write_tokens": c.cache_write_tokens,
+            "cost":               f"{c.cost:.8f}",
+        })
+    return buf.getvalue()
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1716,20 +1753,22 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         return 1
     calls.sort(key=lambda c: c.ts)
 
-    agg = aggregate(calls, baseline=args.baseline, top_n=args.top)
-
-    if args.format == "json":
-        out = render_json(agg, sources)
+    if args.format == "csv":
+        out = render_csv(calls)
     else:
-        out = render_markdown(agg, sources)
+        agg = aggregate(calls, baseline=args.baseline, top_n=args.top)
+        if args.format == "json":
+            out = render_json(agg, sources)
+        else:
+            out = render_markdown(agg, sources)
 
     if args.output:
-        with open(os.path.expanduser(args.output), "w") as fh:
+        with open(os.path.expanduser(args.output), "w", newline="") as fh:
             fh.write(out)
             if not out.endswith("\n"):
                 fh.write("\n")
     else:
-        print(out)
+        print(out, end="")
     return 0
 
 
@@ -1990,8 +2029,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Path to a file or directory. Default: scan known locations.")
     a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"],
                    default=None, help="Restrict scan to one source kind.")
-    a.add_argument("--format", choices=["markdown", "json"], default="markdown",
-                   help="Output format. Default: markdown.")
+    a.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown",
+                   help="Output format. Default: markdown. csv outputs one row per call.")
     a.add_argument("--days", type=int, default=0,
                    help="Only include calls within the last N days. 0 = all time.")
     a.add_argument("--since", default=None, metavar="YYYY-MM-DD",

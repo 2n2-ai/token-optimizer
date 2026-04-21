@@ -78,7 +78,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [ ] `--baseline opus-4-1` for old-model overspend stories.
 - [ ] HTML report output (one-file, no JS framework).
 - [ ] PDF report (matplotlib, but only if a customer asks).
-- [ ] CSV export.
+- [x] CSV export. ✅ (2026-04-21, v0.4.1, --format csv on analyze; render_csv() one row per call; 8 decimal cost precision; sorted by timestamp; 7 new tests)
 - [ ] Slack subcommand: post the receipt to a channel.
 - [ ] Token-by-token cache hit visualization.
 - [ ] Inference geo (US-only) cost multiplier in pricing math.
