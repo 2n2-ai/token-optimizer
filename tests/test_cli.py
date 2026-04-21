@@ -1262,5 +1262,142 @@ class OpenAiSdkParserTests(unittest.TestCase):
         self.assertIsInstance(sources, list)
 
 
+class ChatGptExportParserTests(unittest.TestCase):
+    """Tests for parse_chatgpt_export (v0.4.0)."""
+
+    CONV_FIXTURE = [
+        {
+            "id": "conv-abc",
+            "create_time": 1714000000.0,
+            "mapping": {
+                "root": {
+                    "id": "root", "message": None, "parent": None,
+                    "children": ["node-user"],
+                },
+                "node-user": {
+                    "id": "node-user", "parent": "root", "children": ["node-asst"],
+                    "message": {
+                        "id": "msg-user", "author": {"role": "user"},
+                        "create_time": 1714000001.0,
+                        "content": {"content_type": "text", "parts": ["Hello there!"]},
+                        "metadata": {},
+                    },
+                },
+                "node-asst": {
+                    "id": "node-asst", "parent": "node-user", "children": [],
+                    "message": {
+                        "id": "msg-asst", "author": {"role": "assistant"},
+                        "create_time": 1714000002.0,
+                        "content": {"content_type": "text",
+                                    "parts": ["Hi! I am an AI assistant."]},
+                        "metadata": {"model_slug": "gpt-4o"},
+                    },
+                },
+            },
+        }
+    ]
+
+    def _write_conv(self, tmp, data=None):
+        p = os.path.join(tmp, "conversations.json")
+        with open(p, "w") as f:
+            json.dump(data if data is not None else self.CONV_FIXTURE, f)
+        return p
+
+    def test_plain_conversations_json(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            p = self._write_conv(tmp)
+            calls = list(to.parse_chatgpt_export(p))
+            self.assertEqual(len(calls), 1)
+            c = calls[0]
+            self.assertEqual(c.model, "gpt-4o")
+            self.assertEqual(c.source, "chatgpt-export")
+            self.assertGreater(c.output_tokens, 0)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_directory_containing_conversations_json(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            self._write_conv(tmp)
+            calls = list(to.parse_chatgpt_export(tmp))
+            self.assertEqual(len(calls), 1)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_zip_export(self):
+        import zipfile as zf_mod
+        tmp = tempfile.mkdtemp()
+        try:
+            conv_p = self._write_conv(tmp)
+            zip_p = os.path.join(tmp, "export.zip")
+            with zf_mod.ZipFile(zip_p, "w") as zf:
+                zf.write(conv_p, "conversations.json")
+            calls = list(to.parse_chatgpt_export(zip_p))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].model, "gpt-4o")
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_timestamp_from_message_create_time(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            p = self._write_conv(tmp)
+            calls = list(to.parse_chatgpt_export(p))
+            # create_time=1714000002 → 2024-04-25 UTC
+            self.assertEqual(calls[0].ts.year, 2024)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_model_slug_mapping(self):
+        # legacy slug → gpt-3.5-turbo
+        data = json.loads(json.dumps(self.CONV_FIXTURE))
+        data[0]["mapping"]["node-asst"]["message"]["metadata"]["model_slug"] = \
+            "text-davinci-002-render-sha"
+        tmp = tempfile.mkdtemp()
+        try:
+            p = self._write_conv(tmp, data)
+            calls = list(to.parse_chatgpt_export(p))
+            self.assertEqual(calls[0].model, "gpt-3.5-turbo")
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_user_messages_not_yielded(self):
+        # Only assistant messages should produce Call objects
+        tmp = tempfile.mkdtemp()
+        try:
+            p = self._write_conv(tmp)
+            calls = list(to.parse_chatgpt_export(p))
+            for c in calls:
+                self.assertEqual(c.source, "chatgpt-export")
+            # Only 1 assistant node in fixture → 1 call
+            self.assertEqual(len(calls), 1)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_empty_conversations_json(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            p = self._write_conv(tmp, [])
+            calls = list(to.parse_chatgpt_export(p))
+            self.assertEqual(calls, [])
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_source_choice_chatgpt_export(self):
+        p = to.build_parser()
+        args = p.parse_args(["analyze", "--source", "chatgpt-export"])
+        self.assertEqual(args.source, "chatgpt-export")
+
+    def test_is_chatgpt_path_detects_conversations_json(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            p = self._write_conv(tmp)
+            self.assertTrue(to._is_chatgpt_path(p))
+            self.assertTrue(to._is_chatgpt_path(tmp))
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+
 if __name__ == "__main__":
     unittest.main()

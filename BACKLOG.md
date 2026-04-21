@@ -61,7 +61,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 - [x] Anthropic SDK direct parser (formalize the Claude Code shape). ✅ (2026-04-20, v0.3.8, parse_anthropic_sdk_log handles 3 shapes: raw Message, timestamped wrapper, flat; --source anthropic-sdk; auto-discovers ~/.anthropic/logs/*.jsonl; 7 new tests)
 - [ ] Cursor parser.
 - [x] OpenAI SDK parser. ✅ (2026-04-20, v0.3.9, parse_openai_sdk_log handles raw ChatCompletion, timestamped wrapper, flat dict; prompt_tokens_details.cached_tokens → cache_read; unix epoch timestamp; --source openai-sdk; 8 new tests)
-- [ ] ChatGPT data export parser.
+- [x] ChatGPT data export parser. ✅ (2026-04-21, v0.4.0, parse_chatgpt_export handles conversations.json / directory / .zip; model_slug mapping; token estimation ~4 chars/token; --source chatgpt-export; 9 new tests)
 - [x] Pricing for non-Anthropic providers (Google, OpenAI, Mistral) so
       mixed stacks get real numbers instead of $0. ✅ (2026-04-19, v0.3.6, Google Gemini + OpenAI GPT/reasoning + Mistral, provider prefix stripping in normalize_model, 11 new tests)
 

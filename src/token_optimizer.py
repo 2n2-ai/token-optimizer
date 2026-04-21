@@ -36,11 +36,12 @@ import os
 import sqlite3
 import sys
 import time
+import zipfile
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-__version__ = "0.3.9"
+__version__ = "0.4.0"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -702,6 +703,172 @@ def parse_openai_sdk_log(path: str) -> Iterable[Call]:
             )
 
 
+# ChatGPT export model-slug → our normalized model name.
+# Slugs are the internal identifiers OpenAI uses in conversations.json.
+_CHATGPT_MODEL_MAP: Dict[str, str] = {
+    "gpt-4o":               "gpt-4o",
+    "gpt-4o-mini":          "gpt-4o-mini",
+    "gpt-4":                "gpt-4",
+    "gpt-4-browsing":       "gpt-4",
+    "gpt-4-plugins":        "gpt-4",
+    "gpt-4-turbo":          "gpt-4-turbo",
+    "gpt-3.5-turbo":        "gpt-3.5-turbo",
+    "o1":                   "o1",
+    "o1-preview":           "o1",
+    "o1-mini":              "o1-mini",
+    "o3":                   "o3",
+    "o3-mini":              "o3-mini",
+    "text-davinci-002-render-sha": "gpt-3.5-turbo",  # legacy ChatGPT default
+}
+
+
+def _chatgpt_content_text(content: Any) -> str:
+    """Extract plain text from a ChatGPT message content block."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        ct = content.get("content_type", "")
+        if ct == "text":
+            parts = content.get("parts") or []
+            return " ".join(p for p in parts if isinstance(p, str))
+        if ct == "tether_browsing_display":
+            return ""  # browsing result blocks — no user-visible tokens
+    if isinstance(content, list):
+        return " ".join(_chatgpt_content_text(p) for p in content)
+    return ""
+
+
+def _estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 chars per token (OpenAI rule of thumb)."""
+    return max(1, len(text) // 4)
+
+
+def _parse_chatgpt_conversations(data: List[Any]) -> Iterable[Call]:
+    """Core parser: yield Calls from a deserialized conversations.json list."""
+    if not isinstance(data, list):
+        return
+
+    for conv in data:
+        if not isinstance(conv, dict):
+            continue
+        conv_id = conv.get("id") or conv.get("conversation_id") or "unknown"
+        mapping = conv.get("mapping") or {}
+        if not isinstance(mapping, dict):
+            continue
+
+        # Walk nodes in creation order to build cumulative context length.
+        # We track running context chars so input tokens can be estimated
+        # as the conversation text seen by the model at each assistant turn.
+        nodes_by_id: Dict[str, Dict] = {}
+        for node_id, node in mapping.items():
+            if isinstance(node, dict):
+                nodes_by_id[node_id] = node
+
+        # Topological order: walk from root children
+        def _walk(node_id: str, cumulative_chars: int) -> Iterable[Call]:
+            node = nodes_by_id.get(node_id)
+            if not node:
+                return
+            msg = node.get("message")
+            if msg and isinstance(msg, dict):
+                author = msg.get("author") or {}
+                role = author.get("role") if isinstance(author, dict) else None
+                content = msg.get("content") or ""
+                text = _chatgpt_content_text(content)
+                msg_chars = len(text)
+
+                if role == "assistant" and msg_chars > 0:
+                    # Timestamp from message or conversation create_time
+                    ts_raw = msg.get("create_time") or conv.get("create_time")
+                    if isinstance(ts_raw, (int, float)) and ts_raw > 0:
+                        ts = datetime.fromtimestamp(ts_raw, tz=timezone.utc)
+                    else:
+                        ts = datetime.now(timezone.utc)
+
+                    # Model from metadata slug
+                    metadata = msg.get("metadata") or {}
+                    slug = metadata.get("model_slug") or ""
+                    model = _CHATGPT_MODEL_MAP.get(slug, normalize_model(slug) if slug else "gpt-3.5-turbo")
+
+                    output_t = _estimate_tokens(text)
+                    input_t  = _estimate_tokens(" " * cumulative_chars)  # chars → tokens
+
+                    cost = price_call(model, input_tokens=input_t, output_tokens=output_t, warn=False)
+                    yield Call(
+                        ts=ts,
+                        model=model,
+                        input_tokens=input_t,
+                        output_tokens=output_t,
+                        cache_read_tokens=0,
+                        cache_write_tokens=0,
+                        cost=cost,
+                        source="chatgpt-export",
+                        session_id=conv_id,
+                    )
+
+                cumulative_chars += msg_chars
+
+            for child_id in (node.get("children") or []):
+                yield from _walk(child_id, cumulative_chars)
+
+        # Find root node (parent is None or missing)
+        for node_id, node in nodes_by_id.items():
+            if node.get("parent") is None:
+                yield from _walk(node_id, 0)
+                break
+
+
+def parse_chatgpt_export(path: str) -> Iterable[Call]:
+    """Yield Call objects from a ChatGPT data export.
+
+    Accepts any of:
+      - A ``conversations.json`` file directly
+      - A directory containing ``conversations.json``
+      - A ``.zip`` file (the raw export as downloaded from chatgpt.com)
+
+    Token counts are **estimated** from content length (~4 chars/token) because
+    OpenAI's export does not include usage metadata. Costs are labeled with
+    source="chatgpt-export" so they can be filtered separately.
+    """
+    path = os.path.expanduser(path)
+
+    def _load_json(text: str) -> Any:
+        try:
+            return json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+    # ZIP export
+    if path.endswith(".zip") and zipfile.is_zipfile(path):
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                names = zf.namelist()
+                target = next((n for n in names if n.endswith("conversations.json")), None)
+                if target is None:
+                    return
+                with zf.open(target) as fh:
+                    data = _load_json(fh.read().decode("utf-8", errors="replace"))
+        except (zipfile.BadZipFile, OSError):
+            return
+        yield from _parse_chatgpt_conversations(data or [])
+        return
+
+    # Directory containing conversations.json
+    if os.path.isdir(path):
+        conv_path = os.path.join(path, "conversations.json")
+        if not os.path.exists(conv_path):
+            return
+        path = conv_path
+
+    # Plain conversations.json file
+    try:
+        with open(path, "r", errors="replace") as fh:
+            data = _load_json(fh.read())
+    except OSError:
+        return
+    yield from _parse_chatgpt_conversations(data or [])
+
+
 # ---------------------------------------------------------------------------
 # Source discovery
 # ---------------------------------------------------------------------------
@@ -711,6 +878,7 @@ DEFAULT_CLAUDE_CODE_GLOB = "~/.claude/projects/**/*.jsonl"
 DEFAULT_SQLITE_PATH = "~/.openclaw/token-optimizer/usage.db"
 DEFAULT_ANTHROPIC_SDK_GLOB = "~/.anthropic/logs/*.jsonl"
 DEFAULT_OPENAI_SDK_GLOB = "~/.openai/logs/*.jsonl"
+DEFAULT_CHATGPT_EXPORT_PATH = "~/Downloads/chatgpt-export"
 
 
 def _is_session_jsonl(name: str) -> bool:
@@ -721,10 +889,20 @@ def _is_session_jsonl(name: str) -> bool:
     return not any(b in name for b in bad)
 
 
+def _is_chatgpt_path(path: str) -> bool:
+    """True if path looks like a ChatGPT export (zip, conversations.json, or export dir)."""
+    bn = os.path.basename(path)
+    return (
+        path.endswith(".zip")
+        or bn == "conversations.json"
+        or (os.path.isdir(path) and os.path.exists(os.path.join(path, "conversations.json")))
+    )
+
+
 def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[str, str]]:
     """Return a list of (kind, file_or_dir) pairs to read.
 
-    Kind is one of: openclaw, claude-code, sqlite, anthropic-sdk, openai-sdk.
+    Kind is one of: openclaw, claude-code, sqlite, anthropic-sdk, openai-sdk, chatgpt-export.
     """
     found: List[Tuple[str, str]] = []
 
@@ -735,37 +913,39 @@ def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[s
 
     if path:
         path = os.path.expanduser(path)
-        if os.path.isfile(path):
-            if path.endswith(".db"):
+        if os.path.isfile(path) or os.path.isdir(path):
+            if source == "chatgpt-export" or _is_chatgpt_path(path):
+                found.append(("chatgpt-export", path))
+            elif path.endswith(".db"):
                 found.append(("sqlite", path))
             elif source == "anthropic-sdk" or ".anthropic" in path:
                 found.append(("anthropic-sdk", path))
             elif source == "openai-sdk" or ".openai" in path:
                 found.append(("openai-sdk", path))
-            elif "openclaw/agents" in path or source == "openclaw":
-                found.append(("openclaw", path))
-            elif ".claude/projects" in path or source == "claude-code":
-                found.append(("claude-code", path))
-            else:
-                # Ambiguous: try openclaw schema (parser is tolerant)
-                found.append(("openclaw", path))
-        elif os.path.isdir(path):
-            for root, _dirs, files in os.walk(path):
-                for fn in files:
-                    full = os.path.join(root, fn)
-                    if fn.endswith(".db"):
-                        found.append(("sqlite", full))
-                    elif _is_session_jsonl(fn):
-                        if ".anthropic" in root or source == "anthropic-sdk":
-                            found.append(("anthropic-sdk", full))
-                        elif ".openai" in root or source == "openai-sdk":
-                            found.append(("openai-sdk", full))
-                        elif "openclaw" in root:
-                            found.append(("openclaw", full))
-                        elif ".claude" in root:
-                            found.append(("claude-code", full))
-                        else:
-                            found.append(("openclaw", full))
+            elif os.path.isfile(path):
+                if "openclaw/agents" in path or source == "openclaw":
+                    found.append(("openclaw", path))
+                elif ".claude/projects" in path or source == "claude-code":
+                    found.append(("claude-code", path))
+                else:
+                    found.append(("openclaw", path))
+            elif os.path.isdir(path):
+                for root, _dirs, files in os.walk(path):
+                    for fn in files:
+                        full = os.path.join(root, fn)
+                        if fn.endswith(".db"):
+                            found.append(("sqlite", full))
+                        elif _is_session_jsonl(fn):
+                            if ".anthropic" in root or source == "anthropic-sdk":
+                                found.append(("anthropic-sdk", full))
+                            elif ".openai" in root or source == "openai-sdk":
+                                found.append(("openai-sdk", full))
+                            elif "openclaw" in root:
+                                found.append(("openclaw", full))
+                            elif ".claude" in root:
+                                found.append(("claude-code", full))
+                            else:
+                                found.append(("openclaw", full))
         return found
 
     # No path → scan defaults filtered by --source
@@ -781,6 +961,10 @@ def discover_sources(path: Optional[str], source: Optional[str]) -> List[Tuple[s
         add_glob("anthropic-sdk", DEFAULT_ANTHROPIC_SDK_GLOB)
     if source in (None, "openai-sdk"):
         add_glob("openai-sdk", DEFAULT_OPENAI_SDK_GLOB)
+    if source in (None, "chatgpt-export"):
+        export_path = os.path.expanduser(DEFAULT_CHATGPT_EXPORT_PATH)
+        if os.path.exists(export_path):
+            found.append(("chatgpt-export", export_path))
 
     return found
 
@@ -800,6 +984,8 @@ def load_calls(sources: List[Tuple[str, str]], since: Optional[datetime]) -> Lis
                 it = parse_anthropic_sdk_log(path)
             elif kind == "openai-sdk":
                 it = parse_openai_sdk_log(path)
+            elif kind == "chatgpt-export":
+                it = parse_chatgpt_export(path)
             else:
                 continue
             for call in it:
@@ -1511,7 +1697,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
             f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
-            f"  {DEFAULT_OPENAI_SDK_GLOB}",
+            f"  {DEFAULT_OPENAI_SDK_GLOB}\n"
+            f"  {DEFAULT_CHATGPT_EXPORT_PATH}",
             file=sys.stderr,
         )
         return 2
@@ -1572,7 +1759,8 @@ def cmd_waste(args: argparse.Namespace) -> int:
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
             f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
-            f"  {DEFAULT_OPENAI_SDK_GLOB}",
+            f"  {DEFAULT_OPENAI_SDK_GLOB}\n"
+            f"  {DEFAULT_CHATGPT_EXPORT_PATH}",
             file=sys.stderr,
         )
         return 2
@@ -1624,7 +1812,8 @@ def cmd_digest(args: argparse.Namespace) -> int:
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
             f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
-            f"  {DEFAULT_OPENAI_SDK_GLOB}",
+            f"  {DEFAULT_OPENAI_SDK_GLOB}\n"
+            f"  {DEFAULT_CHATGPT_EXPORT_PATH}",
             file=sys.stderr,
         )
         return 2
@@ -1713,7 +1902,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
             f"  {DEFAULT_CLAUDE_CODE_GLOB}\n"
             f"  {DEFAULT_SQLITE_PATH}\n"
             f"  {DEFAULT_ANTHROPIC_SDK_GLOB}\n"
-            f"  {DEFAULT_OPENAI_SDK_GLOB}",
+            f"  {DEFAULT_OPENAI_SDK_GLOB}\n"
+            f"  {DEFAULT_CHATGPT_EXPORT_PATH}",
             file=sys.stderr,
         )
         return 2
@@ -1798,7 +1988,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("analyze", help="Analyze logs and print a report.")
     a.add_argument("path", nargs="?", default=None,
                    help="Path to a file or directory. Default: scan known locations.")
-    a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
+    a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"],
                    default=None, help="Restrict scan to one source kind.")
     a.add_argument("--format", choices=["markdown", "json"], default="markdown",
                    help="Output format. Default: markdown.")
@@ -1818,7 +2008,7 @@ def build_parser() -> argparse.ArgumentParser:
     w = sub.add_parser("waste", help="Show top waste patterns: tier overshoot and cold cache writes.")
     w.add_argument("path", nargs="?", default=None,
                    help="Path to a file or directory. Default: scan known locations.")
-    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
+    w.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"],
                    default=None, help="Restrict scan to one source kind.")
     w.add_argument("--days", type=int, default=0,
                    help="Only include calls within the last N days. 0 = all time.")
@@ -1834,7 +2024,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Compact periodic summary — suitable for weekly email or Slack.")
     dg.add_argument("path", nargs="?", default=None,
                     help="Path to a file or directory. Default: scan known locations.")
-    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
+    dg.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"],
                     default=None, help="Restrict scan to one source kind.")
     dg.add_argument("--days", type=int, default=7,
                     help="Number of days to cover. Default: 7 (weekly).")
@@ -1849,14 +2039,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("sources", help="Print which log sources would be read.")
     s.add_argument("path", nargs="?", default=None)
-    s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"], default=None)
+    s.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"], default=None)
     s.set_defaults(func=cmd_sources)
 
     wt = sub.add_parser("watch",
                         help="Re-run analysis on log changes; print delta of new calls.")
     wt.add_argument("path", nargs="?", default=None,
                     help="Path to a file or directory. Default: scan known locations.")
-    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk"],
+    wt.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"],
                     default=None, help="Restrict scan to one source kind.")
     wt.add_argument("--days", type=int, default=0,
                     help="Only watch calls within the last N days. 0 = all time.")
