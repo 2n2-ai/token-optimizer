@@ -43,7 +43,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
 
 # ---------------------------------------------------------------------------
 # Pricing (USD per million tokens). Updated April 2026 from
@@ -1686,6 +1686,241 @@ def render_json(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
     return json.dumps(payload, indent=2, default=str)
 
 
+_HTML_CSS = """\
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  background:#f7f8fa;color:#1a1a2e;padding:2rem;max-width:1100px;margin:0 auto}
+h1{font-size:1.6rem;margin-bottom:.25rem;color:#0f172a}
+h2{font-size:1.1rem;margin:1.6rem 0 .6rem;color:#1e293b;border-bottom:1px solid #e2e8f0;
+  padding-bottom:.3rem}
+.meta{color:#64748b;font-size:.85rem;margin-bottom:1.5rem}
+.summary{display:flex;flex-wrap:wrap;gap:.75rem;margin-bottom:.5rem}
+.kpi{background:#fff;border:1px solid #e2e8f0;border-radius:.5rem;padding:.75rem 1.25rem;
+  min-width:140px}
+.kpi-label{font-size:.72rem;color:#64748b;text-transform:uppercase;letter-spacing:.05em}
+.kpi-value{font-size:1.35rem;font-weight:700;color:#0f172a;margin-top:.15rem}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:.5rem;
+  overflow:hidden;border:1px solid #e2e8f0;font-size:.875rem}
+th{background:#f1f5f9;text-align:left;padding:.5rem .75rem;font-weight:600;
+  color:#475569;font-size:.8rem;text-transform:uppercase;letter-spacing:.04em}
+th.r,td.r{text-align:right}
+td{padding:.45rem .75rem;border-top:1px solid #f1f5f9;color:#334155}
+tr:hover td{background:#f8fafc}
+.bar-wrap{background:#e2e8f0;border-radius:4px;height:10px;width:160px;display:inline-block}
+.bar-fill{background:#3b82f6;border-radius:4px;height:10px;display:block}
+.badge{display:inline-block;background:#eff6ff;color:#2563eb;border-radius:.25rem;
+  padding:.1rem .4rem;font-size:.78rem;font-family:monospace}
+.savings{background:#f0fdf4;border:1px solid #bbf7d0;border-radius:.5rem;
+  padding:1rem 1.25rem;color:#14532d;font-size:.9rem;line-height:1.6}
+.caution{background:#fff7ed;border:1px solid #fed7aa;border-radius:.5rem;
+  padding:1rem 1.25rem;color:#7c2d12;font-size:.9rem;line-height:1.6}
+.cache-box{background:#fefce8;border:1px solid #fde68a;border-radius:.5rem;
+  padding:1rem 1.25rem;color:#713f12;font-size:.9rem;line-height:1.6}
+footer{margin-top:2rem;font-size:.8rem;color:#94a3b8;border-top:1px solid #e2e8f0;
+  padding-top:1rem}
+footer a{color:#3b82f6;text-decoration:none}
+"""
+
+
+def _he(s: str) -> str:
+    """Minimal HTML entity escaping."""
+    return (
+        str(s)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def render_html(agg: Dict[str, Any], sources: List[Tuple[str, str]]) -> str:
+    """Render a self-contained single-file HTML report. No JS, no external assets."""
+    s = agg["summary"]
+    se = agg["savings_estimate"]
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    total_cost = s["total_cost"] or 1.0
+
+    def _fmt_ts(iso: str) -> str:
+        try:
+            return iso[:16].replace("T", " ")
+        except Exception:
+            return iso
+
+    parts: List[str] = []
+    a = parts.append
+
+    a(f'<!DOCTYPE html><html lang="en"><head>'
+      f'<meta charset="utf-8">'
+      f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+      f'<title>Token Optimizer Report — {_he(now)}</title>'
+      f'<style>{_HTML_CSS}</style>'
+      f'</head><body>')
+
+    a(f'<h1>AI Bill — Itemized Receipt</h1>')
+    a(f'<p class="meta">Generated {_he(now)} &nbsp;·&nbsp; '
+      f'token-optimizer v{_he(__version__)}</p>')
+
+    # KPI summary cards
+    a('<div class="summary">')
+    kpis = [
+        ("Total spend",   fmt_money(s["total_cost"])),
+        ("API calls",     fmt_int(s["total_calls"])),
+        ("Input tokens",  fmt_int(s["total_input_tokens"])),
+        ("Output tokens", fmt_int(s["total_output_tokens"])),
+    ]
+    if s["total_cache_read_tokens"] or s["total_cache_write_tokens"]:
+        kpis.append(("Cache hit rate", f"{s['cache_hit_rate'] * 100:.1f}%"))
+    if s["first_seen"]:
+        kpis.append(("Window",
+                     f"{_fmt_ts(s['first_seen'])} → {_fmt_ts(s['last_seen'])}"))
+    for label, value in kpis:
+        a(f'<div class="kpi"><div class="kpi-label">{_he(label)}</div>'
+          f'<div class="kpi-value">{_he(value)}</div></div>')
+    a('</div>')  # .summary
+
+    # By-source
+    if agg["by_source"]:
+        a('<h2>Spend by source</h2>')
+        a('<table><thead><tr>'
+          '<th>Source</th><th class="r">Calls</th><th class="r">Cost</th>'
+          '</tr></thead><tbody>')
+        for r in sorted(agg["by_source"], key=lambda x: x["cost"], reverse=True):
+            a(f'<tr><td>{_he(r["source"])}</td>'
+              f'<td class="r">{fmt_int(r["calls"])}</td>'
+              f'<td class="r">{_he(fmt_money(r["cost"]))}</td></tr>')
+        a('</tbody></table>')
+
+    # By-model
+    a('<h2>Spend by model</h2>')
+    a('<table><thead><tr>'
+      '<th>Model</th><th class="r">Calls</th>'
+      '<th class="r">Input</th><th class="r">Output</th>'
+      '<th class="r">Cache R</th><th class="r">Cache W</th>'
+      '<th class="r">Cost</th><th class="r">Cost/call</th><th class="r">Share</th>'
+      '</tr></thead><tbody>')
+    zero_models = []
+    for r in agg["by_model"]:
+        if r["cost"] == 0.0:
+            zero_models.append(r["model"])
+            continue
+        share = r["cost"] / total_cost * 100
+        cpc = r["cost"] / r["calls"] if r["calls"] else 0.0
+        a(f'<tr>'
+          f'<td><span class="badge">{_he(r["model"])}</span></td>'
+          f'<td class="r">{fmt_int(r["calls"])}</td>'
+          f'<td class="r">{fmt_int(r["input"])}</td>'
+          f'<td class="r">{fmt_int(r["output"])}</td>'
+          f'<td class="r">{fmt_int(r["cache_read"])}</td>'
+          f'<td class="r">{fmt_int(r["cache_write"])}</td>'
+          f'<td class="r">{_he(fmt_money(r["cost"]))}</td>'
+          f'<td class="r">{_he(fmt_money(cpc))}</td>'
+          f'<td class="r">{share:.1f}%</td>'
+          f'</tr>')
+    a('</tbody></table>')
+    if zero_models:
+        a(f'<p class="meta" style="margin-top:.4rem">'
+          f'{len(zero_models)} model(s) with $0 cost hidden: '
+          + ", ".join(f'<span class="badge">{_he(m)}</span>' for m in zero_models)
+          + '</p>')
+
+    # By-day with CSS bars
+    if agg["by_day"]:
+        a('<h2>Spend by day</h2>')
+        a('<table><thead><tr>'
+          '<th>Date</th><th class="r">Calls</th><th class="r">Cost</th>'
+          '<th>Trend</th>'
+          '</tr></thead><tbody>')
+        max_cost = max(r["cost"] for r in agg["by_day"]) or 1.0
+        for r in agg["by_day"]:
+            pct = int(r["cost"] / max_cost * 100)
+            a(f'<tr>'
+              f'<td>{_he(r["date"])}</td>'
+              f'<td class="r">{fmt_int(r["calls"])}</td>'
+              f'<td class="r">{_he(fmt_money(r["cost"]))}</td>'
+              f'<td><span class="bar-wrap">'
+              f'<span class="bar-fill" style="width:{pct}%"></span>'
+              f'</span></td>'
+              f'</tr>')
+        a('</tbody></table>')
+
+    # Top calls
+    if agg["top_calls"]:
+        n = len(agg["top_calls"])
+        a(f'<h2>Top {n} most expensive calls</h2>')
+        a('<table><thead><tr>'
+          '<th class="r">#</th><th>When</th><th>Model</th>'
+          '<th class="r">In</th><th class="r">Out</th>'
+          '<th class="r">Cache R</th><th class="r">Cache W</th>'
+          '<th class="r">Cost</th>'
+          '</tr></thead><tbody>')
+        for i, c in enumerate(agg["top_calls"], 1):
+            rec = c.get("tier_recommended")
+            tip = f' title="→ {_he(rec)}"' if rec else ""
+            a(f'<tr>'
+              f'<td class="r">{i}</td>'
+              f'<td>{_he(c["timestamp"][:19])}</td>'
+              f'<td><span class="badge"{tip}>{_he(c["model"])}</span></td>'
+              f'<td class="r">{fmt_int(c["input_tokens"])}</td>'
+              f'<td class="r">{fmt_int(c["output_tokens"])}</td>'
+              f'<td class="r">{fmt_int(c["cache_read_tokens"])}</td>'
+              f'<td class="r">{fmt_int(c["cache_write_tokens"])}</td>'
+              f'<td class="r">{_he(fmt_money(c["cost"]))}</td>'
+              f'</tr>')
+        a('</tbody></table>')
+
+    # Savings estimate
+    delta = se["delta_vs_baseline"]
+    cls = "savings" if delta >= 0 else "caution"
+    if delta > 0:
+        verdict = (f"You're already spending <strong>{fmt_money(delta)}</strong> less "
+                   f"than the flat-rate baseline — your model mix is paying off.")
+    elif delta < 0:
+        verdict = (f"You're spending <strong>{fmt_money(abs(delta))}</strong> more than "
+                   f"the flat-rate baseline — most of that is Opus on calls that may "
+                   f"not need it.")
+    else:
+        verdict = "You're spending exactly what the flat-rate baseline would cost."
+    a(f'<h2>Savings estimate</h2>')
+    a(f'<div class="{cls}">'
+      f'If every call had run on <strong>{_he(se["baseline_model"])}</strong> with '
+      f'the same token mix, you would have spent '
+      f'{_he(fmt_money(se["baseline_cost_if_all_on_baseline"]))} vs your actual '
+      f'{_he(fmt_money(se["actual_cost"]))}. {verdict}')
+    if se["downshift_candidates"]:
+        a(f'<br><br><strong>{fmt_int(se["downshift_candidates"])}</strong> calls produced '
+          f'≤{se["downshift_output_ceiling_tokens"]} output tokens and were probably safe '
+          f'to run on the next tier down — routing them would have saved '
+          f'<strong>{_he(fmt_money(se["downshift_savings"]))}</strong>.')
+    a('</div>')
+
+    # Cache opportunity
+    co = agg.get("cache_opportunity", {})
+    if co.get("eligible_calls", 0) > 0 and co.get("potential_saving", 0.0) > 0:
+        a('<h2>Cache opportunity</h2>')
+        a(f'<div class="cache-box">'
+          f'<strong>{fmt_int(co["eligible_calls"])}</strong> calls had '
+          f'≥{co["min_input_tokens_threshold"]} input tokens but zero cache reads '
+          f'({fmt_int(co["eligible_input_tokens"])} uncached input tokens). Enabling '
+          f'prompt caching could save <strong>{_he(fmt_money(co["potential_saving"]))}'
+          f'</strong>.'
+          f'</div>')
+
+    # Sources footer
+    if sources:
+        kinds: Dict[str, int] = defaultdict(int)
+        for kind, _ in sources:
+            kinds[kind] += 1
+        src_str = " &nbsp;·&nbsp; ".join(
+            f"<strong>{_he(k)}</strong> ({n})" for k, n in kinds.items()
+        )
+        a(f'<footer>Sources: {src_str} &nbsp;·&nbsp; '
+          f'<a href="https://github.com/2n2-ai/token-optimizer">token-optimizer</a> '
+          f'— read-only, local-only, no API keys.</footer>')
+
+    a('</body></html>')
+    return "".join(parts)
+
+
 _CSV_FIELDS = [
     "timestamp", "model", "source", "session_id",
     "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
@@ -1759,6 +1994,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         agg = aggregate(calls, baseline=args.baseline, top_n=args.top)
         if args.format == "json":
             out = render_json(agg, sources)
+        elif args.format == "html":
+            out = render_html(agg, sources)
         else:
             out = render_markdown(agg, sources)
 
@@ -2029,8 +2266,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Path to a file or directory. Default: scan known locations.")
     a.add_argument("--source", choices=["openclaw", "claude-code", "sqlite", "anthropic-sdk", "openai-sdk", "chatgpt-export"],
                    default=None, help="Restrict scan to one source kind.")
-    a.add_argument("--format", choices=["markdown", "json", "csv"], default="markdown",
-                   help="Output format. Default: markdown. csv outputs one row per call.")
+    a.add_argument("--format", choices=["markdown", "json", "csv", "html"], default="markdown",
+                   help="Output format. Default: markdown. html = single-file report; csv = one row per call.")
     a.add_argument("--days", type=int, default=0,
                    help="Only include calls within the last N days. 0 = all time.")
     a.add_argument("--since", default=None, metavar="YYYY-MM-DD",

@@ -76,7 +76,7 @@ Honest state of every track. Anything not in here doesn't exist yet.
 ## ❄️ Cold storage / nice-to-have
 
 - [ ] `--baseline opus-4-1` for old-model overspend stories.
-- [ ] HTML report output (one-file, no JS framework).
+- [x] HTML report output (one-file, no JS framework). ✅ (2026-04-22, v0.4.2, --format html; render_html() with inline CSS; KPI cards, model table, CSS bar chart, savings/cache boxes; _he() entity escaping; 7 new tests)
 - [ ] PDF report (matplotlib, but only if a customer asks).
 - [x] CSV export. ✅ (2026-04-21, v0.4.1, --format csv on analyze; render_csv() one row per call; 8 decimal cost precision; sorted by timestamp; 7 new tests)
 - [ ] Slack subcommand: post the receipt to a channel.

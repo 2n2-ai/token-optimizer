@@ -1511,5 +1511,89 @@ class CsvExportTests(unittest.TestCase):
         self.assertIn("cost", to._CSV_FIELDS)
 
 
+class HtmlReportTests(unittest.TestCase):
+    """Tests for --format html on the analyze subcommand (v0.4.2)."""
+
+    def _make_fixture(self, tmp):
+        p = os.path.join(tmp, "s.jsonl")
+        _write_jsonl(p, OPENCLAW_SAMPLE)
+        return p
+
+    def _get_html(self, tmp):
+        p = self._make_fixture(tmp)
+        calls = list(to.parse_openclaw_session(p))
+        calls.sort(key=lambda c: c.ts)
+        agg = to.aggregate(calls, baseline=to.DEFAULT_BASELINE)
+        return to.render_html(agg, [("openclaw", p)])
+
+    def test_html_is_doctype(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            html = self._get_html(tmp)
+            self.assertTrue(html.startswith("<!DOCTYPE html>"))
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_html_contains_model_names(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            html = self._get_html(tmp)
+            self.assertIn("claude-opus-4-6", html)
+            self.assertIn("claude-sonnet-4-6", html)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_html_contains_cost(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            html = self._get_html(tmp)
+            # Summary KPI should have a dollar amount
+            self.assertIn("$", html)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_html_has_bar_chart(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            html = self._get_html(tmp)
+            self.assertIn("bar-fill", html)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_html_closes_properly(self):
+        tmp = tempfile.mkdtemp()
+        try:
+            html = self._get_html(tmp)
+            self.assertIn("</html>", html)
+            self.assertIn("</body>", html)
+        finally:
+            import shutil; shutil.rmtree(tmp)
+
+    def test_html_escapes_special_chars(self):
+        # _he() must escape <, >, &, "
+        self.assertEqual(to._he("<b>"), "&lt;b&gt;")
+        self.assertEqual(to._he("a & b"), "a &amp; b")
+        self.assertEqual(to._he('"q"'), "&quot;q&quot;")
+
+    def test_analyze_html_format_flag(self):
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            p = self._make_fixture(tmp.name)
+            out_path = os.path.join(tmp.name, "report.html")
+            rc = to.main([
+                "analyze", p,
+                "--source", "openclaw",
+                "--format", "html",
+                "-o", out_path,
+            ])
+            self.assertEqual(rc, 0)
+            with open(out_path) as fh:
+                body = fh.read()
+            self.assertIn("<!DOCTYPE html>", body)
+            self.assertIn("claude-opus-4-6", body)
+        finally:
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()
