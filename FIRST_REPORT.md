@@ -1,26 +1,26 @@
 # Token Optimizer — Itemized Receipt
 
-_Generated 2026-05-20 08:00 UTC_
+_Generated 2026-05-21 08:00 UTC_
 
 Your AI bill has no itemization. **This is the itemized receipt.**
 
 ## Summary
 
 - **Total spend:** $1,688.28
-- **API calls:** 9,750
-- **Input tokens:** 8,300,352
-- **Output tokens:** 3,002,419
+- **API calls:** 9,800
+- **Input tokens:** 8,973,813
+- **Output tokens:** 3,015,821
 - **Cache reads:** 902,689,789
 - **Cache writes:** 80,129,820
-- **Cache hit rate:** 91.1%
-- **Window:** 2026-04-01 17:23 → 2026-05-20 05:09
+- **Cache hit rate:** 91.0%
+- **Window:** 2026-04-01 17:23 → 2026-05-21 05:09
 
 ## Spend by source
 
 | Source | Calls | Cost |
 |---|---:|---:|
-| openclaw | 7,430 | $1,525.91 |
-| claude-code | 2,269 | $161.95 |
+| openclaw | 7,466 | $1,525.91 |
+| claude-code | 2,283 | $161.95 |
 | sqlite | 51 | $0.42 |
 
 ## Spend by model
@@ -58,7 +58,8 @@ _(8 model(s) with $0 cost hidden: `delivery-mirror`, `gemini-2.5-pro`, `gateway-
 | 2026-04-22 | 61 | $5.86 | █ |
 | 2026-05-18 | 100 | $4.10 | █ |
 | 2026-05-19 | 55 | $0.0000 | █ |
-| 2026-05-20 | 14 | $0.0000 | █ |
+| 2026-05-20 | 49 | $0.0000 | █ |
+| 2026-05-21 | 15 | $0.0000 | █ |
 
 ## Top 10 most expensive calls
 
@@ -77,7 +78,7 @@ _(8 model(s) with $0 cost hidden: `delivery-mirror`, `gemini-2.5-pro`, `gateway-
 
 ## Savings teaser
 
-If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $641.23 vs your actual $1,688.28. You're spending **$1,047.05** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
+If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $643.45 vs your actual $1,688.28. You're spending **$1,044.83** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
 
 **4,800** of your calls produced ≤200 output tokens, which means they were probably safe to run on the next tier down. Routing them that way would have cost $900.63 instead of $1,688.28 — a savings of **$787.66**.
 
@@ -85,7 +86,7 @@ _This is a heuristic. Phase 2 ships a real classifier and per-call recommendatio
 
 ## Sources read
 
-- **openclaw**: 118 file(s)
+- **openclaw**: 124 file(s)
 - **claude-code**: 18 file(s)
 - **sqlite**: 1 file(s)
 
