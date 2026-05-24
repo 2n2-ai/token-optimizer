@@ -1,26 +1,26 @@
 # Token Optimizer — Itemized Receipt
 
-_Generated 2026-05-23 08:00 UTC_
+_Generated 2026-05-24 08:00 UTC_
 
 Your AI bill has no itemization. **This is the itemized receipt.**
 
 ## Summary
 
 - **Total spend:** $1,586.90
-- **API calls:** 8,383
-- **Input tokens:** 10,287,264
-- **Output tokens:** 2,401,446
+- **API calls:** 8,447
+- **Input tokens:** 11,208,601
+- **Output tokens:** 2,418,188
 - **Cache reads:** 795,408,200
 - **Cache writes:** 74,622,350
 - **Cache hit rate:** 90.3%
-- **Window:** 2026-04-01 17:23 → 2026-05-23 05:09
+- **Window:** 2026-04-01 17:23 → 2026-05-24 05:09
 
 ## Spend by source
 
 | Source | Calls | Cost |
 |---|---:|---:|
-| openclaw | 7,534 | $1,525.91 |
-| claude-code | 798 | $60.57 |
+| openclaw | 7,579 | $1,525.91 |
+| claude-code | 817 | $60.57 |
 | sqlite | 51 | $0.42 |
 
 ## Spend by model
@@ -61,7 +61,8 @@ _(8 model(s) with $0 cost hidden: `delivery-mirror`, `gemini-2.5-pro`, `gateway-
 | 2026-05-20 | 49 | $0.0000 | █ |
 | 2026-05-21 | 58 | $0.0000 | █ |
 | 2026-05-22 | 42 | $0.0000 | █ |
-| 2026-05-23 | 11 | $0.0000 | █ |
+| 2026-05-23 | 65 | $0.0000 | █ |
+| 2026-05-24 | 10 | $0.0000 | █ |
 
 ## Top 10 most expensive calls
 
@@ -80,7 +81,7 @@ _(8 model(s) with $0 cost hidden: `delivery-mirror`, `gemini-2.5-pro`, `gateway-
 
 ## Savings teaser
 
-If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $585.34 vs your actual $1,586.90. You're spending **$1,001.56** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
+If every call had run on **claude-sonnet-4-6** with the same token mix, you would have spent $588.35 vs your actual $1,586.90. You're spending **$998.55** more than the flat-rate baseline — most of that is Opus on calls that may not need it.
 
 **4,730** of your calls produced ≤200 output tokens, which means they were probably safe to run on the next tier down. Routing them that way would have cost $802.53 instead of $1,586.90 — a savings of **$784.38**.
 
@@ -88,8 +89,8 @@ _This is a heuristic. Phase 2 ships a real classifier and per-call recommendatio
 
 ## Sources read
 
-- **openclaw**: 136 file(s)
-- **claude-code**: 4 file(s)
+- **openclaw**: 145 file(s)
+- **claude-code**: 7 file(s)
 - **sqlite**: 1 file(s)
 
 ---
